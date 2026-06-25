@@ -38,7 +38,7 @@ A web app that prepares job seekers for technical interviews by generating role-
 | Database         | PostgreSQL                                      | Multi-user, production-grade, relational                       |
 | Auth             | JWT + PyJWT + FastAPI Security                  | Stateless, works identically for React and iOS                 |
 | Password hashing | bcrypt                                          | Intentionally slow, salted, brute-force resistant              |
-| AI               | Google Gemini API (gemini-2.5-flash)            | Generates questions and evaluates answers (free tier)          |
+| AI               | Groq API (llama-3.3-70b-versatile)              | Generates questions and evaluates answers (free tier)          |
 | Frontend         | React                                           | Portfolio value, co-op resume signal, needed for iOS API layer |
 | Deployment       | Railway                                         | Simple setup, auto-detects FastAPI, free tier                  |
 
@@ -102,7 +102,7 @@ GET    /sessions                               — get all past sessions (protec
 GET    /sessions/{id}                          — get session + all questions (protected)
 PATCH  /sessions/{id}                          — mark session completed (protected)
 
-POST   /sessions/{id}/questions                — generate questions via Gemini (protected)
+POST   /sessions/{id}/questions                — generate questions via Groq (protected)
 POST   /sessions/{id}/questions/{qid}/answer   — submit answer, get AI feedback (protected)
 POST   /sessions/{id}/questions/{qid}/skip     — skip a question (protected)
 ```
@@ -117,32 +117,32 @@ POST   /sessions/{id}/questions/{qid}/skip     — skip a question (protected)
 2. JWT verified — is this a real logged-in user?
 3. Input validated — is there actually an answer?
 4. Original question fetched from PostgreSQL
-5. Gemini called with question + user's answer
-6. Gemini returns score (1–5) + structured feedback
+5. Groq called with question + user's answer
+6. Groq returns score (1–5) + structured feedback
 7. Answer, score, and feedback saved to questions table in PostgreSQL
 8. Response returned to frontend as JSON
 
-Gemini never touches the database. The backend handles everything before and after the Gemini call.
+Groq never touches the database. The backend handles everything before and after the Groq call.
 
 ---
 
-## Gemini API Usage
+## Groq API Usage
 
-**Model:** `gemini-2.5-flash`
+**Model:** `llama-3.3-70b-versatile`
 
-**SDK:** `google-genai` (the modern unified SDK; not the older `google-generativeai`).
+**SDK:** `groq` (the official Groq Python SDK; OpenAI-compatible chat completions API via `client.chat.completions.create`).
 
-**Question generation:** Send full job posting text + role title → receive JSON list of questions
+**Question generation:** Send full job posting text + role title → receive a JSON object of the form `{"questions": [...]}` with exactly 5 question strings
 
-**Answer evaluation:** Send question + user's answer → receive JSON with score and feedback
+**Answer evaluation:** Send question + user's answer → receive JSON with `score` (integer 1–5) and `feedback` (string)
 
 **No conversation history needed:** Questions are generated once upfront and stored. Each evaluation is independent.
 
-**Always enforce JSON output via `response_mime_type="application/json"` and a `response_schema`.** Vague prompts produce inconsistent responses; structured-output mode guarantees parseable JSON.
+**Always enforce JSON output via `response_format={"type": "json_object"}`** and describe the exact JSON shape in the prompt. Vague prompts produce inconsistent responses; JSON mode guarantees parseable JSON. The backend then strictly validates the parsed shape (question count, score type/range) before trusting it.
 
-**Error handling:** Catch `google.api_core.exceptions.DeadlineExceeded`, `ResourceExhausted`, and `GoogleAPIError` — return clean HTTP errors, no retry logic in V1.
+**Error handling:** Catch `groq.APIError` — return clean HTTP errors, no retry logic in V1.
 
-**Why Gemini over Claude:** Free tier allows real LLM responses during development without spending. Same prompt-engineering principles apply; if a future migration back to Claude (or any provider) is needed, the `app/llm.py` seam keeps callers unchanged.
+**Why Groq:** Free tier allows real LLM responses during development without spending, with fast inference. Same prompt-engineering principles apply; if a future migration to Claude (or any provider) is needed, the `app/llm.py` seam keeps callers unchanged.
 
 ---
 
@@ -150,9 +150,9 @@ Gemini never touches the database. The backend handles everything before and aft
 
 ```
 DATABASE_URL=postgresql://user:password@localhost/dbname
-GEMINI_API_KEY=...
+GROQ_API_KEY=...
 JWT_SECRET=long-random-string
-USE_MOCK_LLM=true   # set to false to call the real Gemini API
+USE_MOCK_LLM=true   # set to false to call the real Groq API
 ```
 
 Never hardcode these. Always read from environment. Never commit `.env` to GitHub.
@@ -169,8 +169,8 @@ Never hardcode these. Always read from environment. Never commit `.env` to GitHu
 6. Auth routes: POST /auth/register and POST /auth/login working end to end
 7. JWT middleware working — protected routes rejecting invalid tokens
 8. Session routes
-9. Question generation with Gemini
-10. Answer evaluation with Gemini
+9. Question generation with Groq
+10. Answer evaluation with Groq
 11. React frontend (after backend is fully working)
 
 **Rule:** Do not touch the next step until the current one works completely.
@@ -188,3 +188,52 @@ Do not add anything to this list:
 - View past interview sessions
 
 If a feature is not on this list, it does not exist in V1. No exceptions.
+
+When opening pull requests for Lens, follow this exact workflow and format based on my established style.
+
+## Branch naming
+type/short-description
+Examples: fix/answer-evaluation, feat/supabase-auth, chore/cleanup-deps
+
+## Commit message format
+type(scope): short description in imperative mood
+Examples:
+  feat(llm): switch provider from Gemini to Groq
+  fix(auth): wire Supabase JWT verification
+  chore(deps): pin Python version, clean up requirements
+
+## PR title
+Same as the commit message format.
+
+## PR description — exact sections required:
+
+### Summary
+What the PR does and why — the business reason, not just the technical change. Include "Not for merge yet (review pass first)" if it needs review before merging.
+
+### Changes
+Grouped by layer with a short description of what changed and why. Use a table or bullets. Be specific — mention file names, function names, RPC names where relevant.
+
+### Deploy status
+What's already live, what this changes, what needs to happen after merge (migrations, env vars, secrets, etc.). If nothing needs to change, say so explicitly.
+
+### Verification
+How you confirmed it works — commands run, outputs seen, manual testing done, what proves correctness. Be specific.
+
+### Notes (optional)
+Anything the reviewer should know that doesn't fit above — gotchas, deferred work, things intentionally left out.
+
+**Footer:** Always end with "🤖 Generated with Claude Code"
+
+## Workflow
+1. Create a branch from main (never commit directly to main)
+2. Commit all changes to the branch with a proper commit message
+3. Push the branch to GitHub
+4. Open the PR with the full description above
+5. Do NOT merge — wait for my explicit say-so after CodeRabbit reviews
+6. If CodeRabbit leaves comments, address them in follow-up commits on the same branch, then re-request review with @CodeRabbit review
+
+## Responding to CodeRabbit
+- Address actionable comments in follow-up commits
+- For each follow-up commit, add a comment on the PR summarizing what was addressed
+- Re-request review after pushing fixes: comment "@CodeRabbit review"
+- Do not merge until CodeRabbit passes and I say so
