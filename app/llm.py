@@ -73,8 +73,10 @@ def generate_questions(job_posting: str) -> list[str]:
         ) from exc
 
     questions = data.get("questions") if isinstance(data, dict) else None
-    if not isinstance(questions, list) or not all(
-        isinstance(q, str) for q in questions
+    if (
+        not isinstance(questions, list)
+        or len(questions) != 5
+        or not all(isinstance(q, str) for q in questions)
     ):
         raise RuntimeError(
             f"Groq returned an unexpected shape for questions: {data!r}"
@@ -160,12 +162,16 @@ def evaluate_answer(question: str, answer: str) -> dict:
             f"Could not parse Groq evaluation response as JSON: {content!r}"
         ) from exc
 
-    try:
-        score = int(data["score"])
-        feedback = str(data["feedback"])
-    except (KeyError, ValueError, TypeError) as exc:
+    score = data.get("score") if isinstance(data, dict) else None
+    feedback = data.get("feedback") if isinstance(data, dict) else None
+    if (
+        not isinstance(score, int)
+        or isinstance(score, bool)
+        or not 1 <= score <= 5
+        or not isinstance(feedback, str)
+    ):
         raise RuntimeError(
             f"Groq returned an unexpected shape for the evaluation: {data!r}"
-        ) from exc
+        )
 
     return {"score": score, "feedback": feedback}
