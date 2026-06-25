@@ -2,30 +2,22 @@ import json
 import os
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
-from pydantic import BaseModel
+from groq import APIError, Groq
 
 load_dotenv()
 
-GEMINI_MODEL = "gemini-2.5-flash"
-
-
-class _AnswerEvaluation(BaseModel):
-    score: int
-    feedback: str
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 
 def _is_mock_mode() -> bool:
     return os.getenv("USE_MOCK_LLM", "false").lower() == "true"
 
 
-def _get_client() -> genai.Client:
-    api_key = os.getenv("GEMINI_API_KEY")
+def _get_client() -> Groq:
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not set in the environment")
-    return genai.Client(api_key=api_key)
+        raise RuntimeError("GROQ_API_KEY is not set in the environment")
+    return Groq(api_key=api_key)
 
 
 def _job_posting_snippet(job_posting: str, max_chars: int = 180) -> str:
@@ -55,37 +47,39 @@ def generate_questions(job_posting: str) -> list[str]:
     prompt = (
         "You are a technical interviewer. Based on the job posting below, generate "
         "exactly 5 technical interview questions tailored to the role and the skills "
-        "it describes. Return ONLY a JSON array of 5 strings, with no extra text and "
-        "no markdown.\n\n"
+        "it describes. Return ONLY a JSON object of the form "
+        '{"questions": ["...", "...", "...", "...", "..."]} containing exactly 5 '
+        "question strings, with no extra text and no markdown.\n\n"
         f"Job posting:\n{job_posting}"
     )
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=list[str],
-            ),
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
         )
-    except genai_errors.APIError as exc:
+    except APIError as exc:
         raise RuntimeError(
-            f"Gemini API call failed during question generation: {exc}"
+            f"Groq API call failed during question generation: {exc}"
         ) from exc
 
+    content = response.choices[0].message.content
     try:
-        questions = json.loads(response.text)
+        data = json.loads(content)
     except (json.JSONDecodeError, TypeError) as exc:
         raise RuntimeError(
-            f"Could not parse Gemini question response as JSON: {response.text!r}"
+            f"Could not parse Groq question response as JSON: {content!r}"
         ) from exc
 
-    if not isinstance(questions, list) or not all(
-        isinstance(q, str) for q in questions
+    questions = data.get("questions") if isinstance(data, dict) else None
+    if (
+        not isinstance(questions, list)
+        or len(questions) != 5
+        or not all(isinstance(q, str) for q in questions)
     ):
         raise RuntimeError(
-            f"Gemini returned an unexpected shape for questions: {questions!r}"
+            f"Groq returned an unexpected shape for questions: {data!r}"
         )
 
     return questions
@@ -150,32 +144,34 @@ def evaluate_answer(question: str, answer: str) -> dict:
     )
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=_AnswerEvaluation,
-            ),
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
         )
-    except genai_errors.APIError as exc:
+    except APIError as exc:
         raise RuntimeError(
-            f"Gemini API call failed during answer evaluation: {exc}"
+            f"Groq API call failed during answer evaluation: {exc}"
         ) from exc
 
+    content = response.choices[0].message.content
     try:
-        data = json.loads(response.text)
+        data = json.loads(content)
     except (json.JSONDecodeError, TypeError) as exc:
         raise RuntimeError(
-            f"Could not parse Gemini evaluation response as JSON: {response.text!r}"
+            f"Could not parse Groq evaluation response as JSON: {content!r}"
         ) from exc
 
-    try:
-        score = int(data["score"])
-        feedback = str(data["feedback"])
-    except (KeyError, ValueError, TypeError) as exc:
+    score = data.get("score") if isinstance(data, dict) else None
+    feedback = data.get("feedback") if isinstance(data, dict) else None
+    if (
+        not isinstance(score, int)
+        or isinstance(score, bool)
+        or not 1 <= score <= 5
+        or not isinstance(feedback, str)
+    ):
         raise RuntimeError(
-            f"Gemini returned an unexpected shape for the evaluation: {data!r}"
-        ) from exc
+            f"Groq returned an unexpected shape for the evaluation: {data!r}"
+        )
 
     return {"score": score, "feedback": feedback}
