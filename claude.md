@@ -38,7 +38,7 @@ A web app that prepares job seekers for technical interviews by generating role-
 | Database         | PostgreSQL                                      | Multi-user, production-grade, relational                       |
 | Auth             | JWT + PyJWT + FastAPI Security                  | Stateless, works identically for React and iOS                 |
 | Password hashing | bcrypt                                          | Intentionally slow, salted, brute-force resistant              |
-| AI               | Groq API (llama-3.3-70b-versatile)              | Generates questions and evaluates answers (free tier)          |
+| AI               | Groq API (openai/gpt-oss-120b)              | Generates questions and evaluates answers (free tier)          |
 | Frontend         | React                                           | Portfolio value, co-op resume signal, needed for iOS API layer |
 | Deployment       | Railway                                         | Simple setup, auto-detects FastAPI, free tier                  |
 
@@ -128,7 +128,7 @@ Groq never touches the database. The backend handles everything before and after
 
 ## Groq API Usage
 
-**Model:** `llama-3.3-70b-versatile`
+**Model:** `openai/gpt-oss-120b`
 
 **SDK:** `groq` (the official Groq Python SDK; OpenAI-compatible chat completions API via `client.chat.completions.create`).
 
