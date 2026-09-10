@@ -124,24 +124,144 @@ def _mock_evaluate_answer(_question: str, answer: str) -> dict:
     return {"score": score, "feedback": feedback}
 
 
+# --- Rubric-based evaluation (v1) --------------------------------------------
+# Dimension definitions copied VERBATIM from synthetic_data/lens_rubric_v1.md
+# (sections 1-4). Embedded here (rather than read at runtime) so production has
+# no dependency on that git-excluded prototype directory.
+_RUBRIC = {
+    "completeness": (
+        "Does the answer actually address what was asked, regardless of length.\n"
+        "- 1: Doesn't answer the question at all, or answers a different question\n"
+        "- 2: Touches the topic but misses the core of what was asked\n"
+        "- 3: Addresses the question but leaves out an important part\n"
+        "- 4: Addresses the question fully\n"
+        "- 5: Addresses the question fully and anticipates a natural follow-up"
+    ),
+    "substance": (
+        "Length isn't the signal. Does the content earn its length, or is it padded/repeated.\n"
+        "- 1: Empty or a single unsupported assertion\n"
+        "- 2: Mostly filler, buzzwords, or restating the question\n"
+        "- 3: Some real content, some padding or repetition\n"
+        "- 4: Content is dense, little to no padding\n"
+        "- 5: Every sentence adds distinct information"
+    ),
+    "reasoning": (
+        "Does it explain why, not just what. Tradeoffs, mechanisms, causes.\n"
+        "- 1: No reasoning, just a claim or fact\n"
+        "- 2: Gestures at reasoning without actually explaining it\n"
+        "- 3: Some reasoning, but shallow or incomplete\n"
+        "- 4: Clear reasoning connecting the answer to the underlying mechanism or tradeoff\n"
+        "- 5: Reasoning that shows awareness of alternatives or edge cases"
+    ),
+    "correctness": (
+        "Verify against real docs/sources when outside your own expertise. Do not trust "
+        "confident phrasing.\n"
+        "- 1: Central claim is factually wrong\n"
+        "- 2: Mostly right but contains a meaningful factual error\n"
+        "- 3: Correct but imprecise or missing a caveat\n"
+        "- 4: Fully correct\n"
+        "- 5: Fully correct and precise about edge cases or exceptions"
+    ),
+}
+_RUBRIC_ORDER = ("completeness", "substance", "reasoning", "correctness")
+_DISPLAY = {
+    "completeness": "Completeness",
+    "substance": "Substance density",
+    "reasoning": "Reasoning",
+    "correctness": "Correctness",
+}
+
+
+def _build_rubric_prompt(question: str, answer: str) -> str:
+    defs = "\n\n".join(f"{_DISPLAY[d].upper()}:\n{_RUBRIC[d]}" for d in _RUBRIC_ORDER)
+    return (
+        "You are scoring a candidate's interview answer on FOUR independent dimensions: "
+        "completeness, substance density, reasoning, and correctness.\n"
+        "Use ONLY these rubric definitions (do not invent your own criteria):\n\n"
+        f"{defs}\n\n"
+        "SUBSTANCE ENFORCEMENT: if the answer is a single sentence or makes only one "
+        "assertion/point -- however fluent, confident, or technical-sounding -- its Substance "
+        "density score must not exceed 2.\n\n"
+        f"Question asked:\n{question}\n\n"
+        f"Candidate's answer:\n{answer}\n\n"
+        "For EACH dimension: first identify specific evidence in the ANSWER (quote exact "
+        "phrases/sentences from the answer; use an empty list if there is none), THEN assign a "
+        "score from 1 to 5 using that dimension's rubric definition above.\n"
+        "Return ONLY a JSON object, no markdown, exactly:\n"
+        '{"completeness": {"score": <int 1-5>, "evidence": [<quoted strings>], "reasoning": "<one sentence>"}, '
+        '"substance": {"score": <int 1-5>, "evidence": [<quoted strings>], "reasoning": "<one sentence>"}, '
+        '"reasoning": {"score": <int 1-5>, "evidence": [<quoted strings>], "reasoning": "<one sentence>"}, '
+        '"correctness": {"score": <int 1-5>, "evidence": [<quoted strings>], "reasoning": "<one sentence>"}}'
+    )
+
+
+def _parse_dim(obj, name: str) -> dict:
+    if not isinstance(obj, dict):
+        raise RuntimeError(f"Groq evaluation missing or malformed dimension: {name!r}")
+    raw = obj.get("score")
+    if isinstance(raw, bool):
+        raise RuntimeError(f"Groq returned an invalid score for {name!r}: {raw!r}")
+    try:
+        score = int(round(float(raw)))
+    except (TypeError, ValueError):
+        raise RuntimeError(f"Groq returned a non-numeric score for {name!r}: {raw!r}")
+    score = max(1, min(5, score))
+    evidence = obj.get("evidence", [])
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    if not isinstance(evidence, list):
+        evidence = []
+    evidence = [str(e) for e in evidence]
+    reasoning = obj.get("reasoning", "")
+    reasoning = "" if reasoning is None else str(reasoning)
+    return {"score": score, "evidence": evidence, "reasoning": reasoning}
+
+
+def _combine_overall(scores: dict) -> int:
+    """Correctness-ceiling combination (lens_rubric_v1.md 'Combining into an overall score'):
+    correctness 1 caps overall at 2, correctness 2 caps at 3, otherwise overall = rounded
+    average of all four dimensions."""
+    avg = round(sum(scores[d] for d in _RUBRIC_ORDER) / len(_RUBRIC_ORDER))
+    correctness = scores["correctness"]
+    if correctness == 1:
+        overall = min(avg, 2)
+    elif correctness == 2:
+        overall = min(avg, 3)
+    else:
+        overall = avg
+    return max(1, min(5, overall))
+
+
+def _build_feedback(overall: int, dims: dict) -> str:
+    scores = {d: dims[d]["score"] for d in _RUBRIC_ORDER}
+    avg = round(sum(scores.values()) / len(_RUBRIC_ORDER))
+    correctness = scores["correctness"]
+    cap = 2 if correctness == 1 else 3 if correctness == 2 else None
+    capped = cap is not None and avg > cap
+
+    header = f"Overall score: {overall}/5."
+    if capped:
+        header = f"Overall score: {overall}/5 (capped by correctness {correctness}/5)."
+    lines = [header, ""]
+
+    # lowest-scoring dimension first, so the weakness that drove the score leads;
+    # ties fall back to the rubric order for a stable ordering.
+    order = sorted(_RUBRIC_ORDER, key=lambda d: (scores[d], _RUBRIC_ORDER.index(d)))
+    for d in order:
+        info = dims[d]
+        line = f"{_DISPLAY[d]} {info['score']}/5: {info['reasoning']}".rstrip()
+        if info["evidence"]:
+            line += f' (e.g. "{info["evidence"][0]}")'
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def evaluate_answer(question: str, answer: str) -> dict:
     if _is_mock_mode():
         return _mock_evaluate_answer(question, answer)
 
     client = _get_client()
-    prompt = (
-        "You are a technical interviewer evaluating a candidate's answer. Score the "
-        "answer from 1 to 5 using this rubric:\n"
-        "1-2 = too brief or off-topic\n"
-        "3 = on track but surface level\n"
-        "4 = solid with good detail\n"
-        "5 = excellent depth with concrete examples and clear structure\n\n"
-        "Provide concise, constructive written feedback. Return ONLY a JSON object with "
-        'the keys "score" (an integer 1-5) and "feedback" (a string), with no extra '
-        "text and no markdown.\n\n"
-        f"Question:\n{question}\n\n"
-        f"Candidate's answer:\n{answer}"
-    )
+    prompt = _build_rubric_prompt(question, answer)
 
     try:
         response = client.chat.completions.create(
@@ -161,17 +281,10 @@ def evaluate_answer(question: str, answer: str) -> dict:
         raise RuntimeError(
             f"Could not parse Groq evaluation response as JSON: {content!r}"
         ) from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Groq evaluation was not a JSON object: {content!r}")
 
-    score = data.get("score") if isinstance(data, dict) else None
-    feedback = data.get("feedback") if isinstance(data, dict) else None
-    if (
-        not isinstance(score, int)
-        or isinstance(score, bool)
-        or not 1 <= score <= 5
-        or not isinstance(feedback, str)
-    ):
-        raise RuntimeError(
-            f"Groq returned an unexpected shape for the evaluation: {data!r}"
-        )
-
-    return {"score": score, "feedback": feedback}
+    dims = {d: _parse_dim(data.get(d), d) for d in _RUBRIC_ORDER}
+    scores = {d: dims[d]["score"] for d in _RUBRIC_ORDER}
+    overall = _combine_overall(scores)
+    return {"score": overall, "feedback": _build_feedback(overall, dims)}
