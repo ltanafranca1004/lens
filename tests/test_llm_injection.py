@@ -82,5 +82,33 @@ class CombineOverall(unittest.TestCase):
         self.assertEqual(L._combine_overall({"correctness": 4, "reasoning": 4, "substance": 3, "completeness": 5}), 4)
 
 
+class SubstanceSingleSentenceCap(unittest.TestCase):
+    def test_single_sentence_substance_capped(self):
+        # one sentence + a model that (wrongly) returns substance 5 -> code caps it at 2
+        answer = "Just use a debugger to step through the code."
+        with mock.patch.object(L, "_is_mock_mode", return_value=False), \
+             mock.patch.object(L, "_get_client",
+                               return_value=_fake_client(_canned(correctness=5, reasoning=5,
+                                                                 substance=5, completeness=5))):
+            out = L.evaluate_answer("How do you debug?", answer)
+        self.assertIn("Substance density 2/5", out["feedback"])
+        self.assertLessEqual(out["score"], 4)   # dropped from an uncapped 5
+
+    def test_multi_sentence_substance_not_capped(self):
+        answer = "First I reproduce the bug. Then I add logging and step through with a debugger."
+        with mock.patch.object(L, "_is_mock_mode", return_value=False), \
+             mock.patch.object(L, "_get_client",
+                               return_value=_fake_client(_canned(correctness=5, reasoning=5,
+                                                                 substance=5, completeness=5))):
+            out = L.evaluate_answer("How do you debug?", answer)
+        self.assertIn("Substance density 5/5", out["feedback"])
+
+    def test_is_single_sentence(self):
+        self.assertTrue(L._is_single_sentence("Just use a debugger."))
+        self.assertTrue(L._is_single_sentence("no punctuation here"))
+        self.assertTrue(L._is_single_sentence("It costs 3.14 today."))
+        self.assertFalse(L._is_single_sentence("First point. Second point."))
+
+
 if __name__ == "__main__":
     unittest.main()

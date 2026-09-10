@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 from dotenv import load_dotenv
 from groq import APIError, Groq
@@ -215,6 +216,19 @@ def _norm(s) -> str:
     return " ".join(str(s).lower().split())
 
 
+def _is_single_sentence(answer: str) -> bool:
+    """True when the answer has no internal sentence break (i.e. a single sentence).
+
+    Heuristic: split on a sentence terminator (. ! ?) followed by whitespace. Known,
+    intentionally-unsolved edge cases (simple beats a fragile sentence parser here):
+    abbreviations ("e.g.", "U.S.") and a period+space inside decimals/ellipses can
+    over-split, so such a single sentence is treated as multi and left UNcapped -- a
+    lenient, safe direction that never wrongly caps a genuine multi-sentence answer.
+    """
+    parts = [p for p in re.split(r"(?<=[.!?])\s+", answer.strip()) if p.strip()]
+    return len(parts) <= 1
+
+
 def _parse_dim(obj, name: str, answer: str) -> dict:
     if not isinstance(obj, dict):
         raise RuntimeError(f"Groq evaluation missing or malformed dimension: {name!r}")
@@ -311,6 +325,10 @@ def evaluate_answer(question: str, answer: str) -> dict:
         raise RuntimeError(f"Groq evaluation was not a JSON object: {content!r}")
 
     dims = {d: _parse_dim(data.get(d), d, answer) for d in _RUBRIC_ORDER}
+    # Deterministic backstop for the prompt's substance guardrail: enforce the single-sentence
+    # cap in code so a non-compliant model response can't push substance above 2.
+    if _is_single_sentence(answer):
+        dims["substance"]["score"] = min(dims["substance"]["score"], 2)
     scores = {d: dims[d]["score"] for d in _RUBRIC_ORDER}
     overall = _combine_overall(scores)
     return {"score": overall, "feedback": _build_feedback(overall, dims)}
