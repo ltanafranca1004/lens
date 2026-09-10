@@ -207,14 +207,14 @@ Same as the commit message format.
 
 ## PR description — exact sections required:
 
-### Summary
-What the PR does and why — the business reason, not just the technical change. Include "Not for merge yet (review pass first)" if it needs review before merging.
+### What
+Lead with the product/business framing: what this delivers and why it matters (to users or to the app), before any technical detail. Include "Not for merge yet (review pass first)" if it needs a review pass before merging.
 
 ### Changes
 Grouped by layer with a short description of what changed and why. Use a table or bullets. Be specific — mention file names, function names, RPC names where relevant.
 
-### Deploy status
-What's already live, what this changes, what needs to happen after merge (migrations, env vars, secrets, etc.). If nothing needs to change, say so explicitly.
+### Deploy notes (optional)
+Flag ONLY genuinely actionable pre-deploy steps (e.g. "requires the X env var set before deploy", "apply migration Y first"). No multi-party sign-off gating (solo repo, no second approver). Omit this section entirely when there's nothing to flag.
 
 ### Verification
 How you confirmed it works — commands run, outputs seen, manual testing done, what proves correctness. Be specific.
@@ -222,7 +222,7 @@ How you confirmed it works — commands run, outputs seen, manual testing done, 
 ### Notes (optional)
 Anything the reviewer should know that doesn't fit above — gotchas, deferred work, things intentionally left out.
 
-**Footer:** Always end with "🤖 Generated with Claude Code"
+**Footer:** Always end with "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 
 ## Workflow
 1. Create a branch from main (never commit directly to main)
@@ -232,8 +232,10 @@ Anything the reviewer should know that doesn't fit above — gotchas, deferred w
 5. Do NOT merge — wait for my explicit say-so after CodeRabbit reviews
 6. If CodeRabbit leaves comments, address them in follow-up commits on the same branch, then re-request review with @CodeRabbit review
 
+**Exception — docs/markdown-only changes:** For changes that are purely documentation/markdown with zero code or runtime impact (CLAUDE.md, README, other `.md` files), skip the branch + PR process entirely and commit straight to `main`.
+
 ## Responding to CodeRabbit
-- Address actionable comments in follow-up commits
+- Address actionable comments in follow-up commits, using the commit message pattern `fix(scope): address CodeRabbit review [on X]`
 - For each follow-up commit, add a comment on the PR summarizing what was addressed
 - Re-request review after pushing fixes: comment "@CodeRabbit review"
 - Do not merge until CodeRabbit passes and I say so
