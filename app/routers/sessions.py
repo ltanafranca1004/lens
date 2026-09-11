@@ -8,6 +8,7 @@ from app.database import get_db
 from app.llm import evaluate_answer, generate_questions
 from app.models import Question, Session, User
 from app.schemas import AnswerSubmit, QuestionOut, SessionCreate, SessionDetail, SessionOut
+from app.study import build_study_note
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -136,6 +137,7 @@ def submit_answer(
     question.user_answer = payload.answer
     question.score = result["score"]
     question.ai_feedback = result["feedback"]
+    question.rubric = result.get("rubric")
     question.answered_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(question)
@@ -170,8 +172,19 @@ def complete_session(
     current_user: User = Depends(get_current_user),
 ) -> Session:
     session = _get_owned_session(session_id, current_user, db)
+    was_in_progress = session.status == "in_progress"
     session.status = "completed"
     session.completed_at = datetime.now(timezone.utc)
+
+    # Generate the "what to study" note once, only on the in_progress -> completed transition, so a
+    # Groq failure is never retried on a repeated PATCH (no retry in V1) and an already-completed
+    # session is never regenerated. A failure leaves study_note NULL without blocking completion.
+    if was_in_progress:
+        try:
+            session.study_note = build_study_note(session.questions)
+        except RuntimeError:
+            session.study_note = None
+
     db.commit()
     db.refresh(session)
     return session

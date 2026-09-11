@@ -55,7 +55,7 @@ class PromptInjectionIsolation(unittest.TestCase):
         with mock.patch.object(L, "_is_mock_mode", return_value=False), \
              mock.patch.object(L, "_get_client", return_value=_fake_client(_canned(correctness=1))):
             out = L.evaluate_answer("What is a Python closure?", INJECTION)
-        self.assertEqual(set(out), {"score", "feedback"})
+        self.assertEqual(set(out), {"score", "feedback", "rubric"})
         self.assertNotEqual(out["score"], 5)
         self.assertLessEqual(out["score"], 2)
 
