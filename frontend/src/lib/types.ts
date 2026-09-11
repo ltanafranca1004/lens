@@ -21,12 +21,21 @@ export type SessionSummary = {
   study_note: string | null
 }
 
+// One rubric dimension as returned by evaluate_answer / QuestionOut.rubric.
+export type RubricDimension = {
+  score: number
+  evidence: string[]
+  reasoning: string
+}
+
 export type Question = {
   id: number
   question_text: string
   user_answer: string | null
   ai_feedback: string | null
   score: number | null
+  // Per-dimension breakdown (completeness/substance/reasoning/correctness). NULL until answered.
+  rubric: Record<string, RubricDimension> | null
   skipped: boolean
   order_index: number
   answered_at: string | null

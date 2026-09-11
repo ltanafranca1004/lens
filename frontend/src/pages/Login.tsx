@@ -45,43 +45,34 @@ export function LoginPage() {
   const isLogin = mode === 'login'
 
   return (
-    <div className="min-h-full grid lg:grid-cols-12">
+    <div className="min-h-full grid lg:grid-cols-2 bg-page">
       {/* Editorial left column */}
-      <aside className="hidden lg:flex lg:col-span-7 border-r border-rule p-14 flex-col justify-between">
-        <div>
-          <p className="mono-meta">Issue 01 — Inaugural</p>
-          <Link
-            to="/"
-            className="display-serif text-[clamp(3rem,7vw,5rem)] leading-[0.95] text-ink no-underline mt-6 block"
-            style={{ fontVariationSettings: '"opsz" 144' }}
-          >
-            Lens.
-          </Link>
-        </div>
-
+      <aside className="hidden lg:flex border-r border-line p-14 flex-col justify-between bg-paper">
+        <Link to="/" className="font-serif text-[2rem] leading-none text-ink no-underline">
+          Lens
+        </Link>
         <div className="max-w-xl">
-          <p className="display-serif text-3xl leading-tight text-ink-2">
+          <p className="font-serif text-[2.4rem] leading-[1.12] text-ink">
             A quiet place to rehearse the questions you&rsquo;re afraid of.
           </p>
-          <p className="mt-6 text-base leading-relaxed text-ink-soft max-w-prose">
-            Paste a real job posting. Receive technical questions written for the role.
-            Answer at your own pace. Read the feedback. Try again tomorrow.
+          <p className="mt-6 text-[15.5px] leading-[1.62] text-ink-soft max-w-prose [text-wrap:pretty]">
+            Paste a real job posting. Receive technical questions written for the role. Answer at
+            your own pace. Read the reasoning behind every score.
           </p>
         </div>
-
-        <ul className="mono-meta space-y-2">
-          <li>01 — Tailored to the posting</li>
-          <li>02 — One question at a time</li>
-          <li>03 — Honest written feedback</li>
+        <ul className="meta space-y-2">
+          <li>Tailored to the posting</li>
+          <li>One question at a time</li>
+          <li>Every score points at a phrase</li>
         </ul>
       </aside>
 
       {/* Form column */}
-      <section className="lg:col-span-5 p-8 lg:p-14 flex items-center">
+      <section className="p-8 lg:p-14 flex items-center bg-paper lg:bg-page">
         <form onSubmit={onSubmit} className="w-full max-w-md mx-auto">
-          <p className="mono-meta">{isLogin ? 'Sign in' : 'Create account'}</p>
-          <h1 className="display-serif text-4xl mt-3 mb-10 leading-[1.05]">
-            {isLogin ? 'Welcome back.' : 'Begin a new field journal.'}
+          <p className="meta">{isLogin ? 'Sign in' : 'Create account'}</p>
+          <h1 className="font-serif font-normal text-[2.4rem] mt-2 mb-9 leading-[1.08]">
+            {isLogin ? 'Welcome back.' : 'Start practicing.'}
           </h1>
 
           <div className="space-y-7">
@@ -120,23 +111,23 @@ export function LoginPage() {
           </div>
 
           {error && (
-            <p className="mt-6 text-sm text-danger" role="alert">
+            <p className="mt-6 text-sm text-[oklch(0.5_0.14_25)]" role="alert">
               {error}
             </p>
           )}
 
-          <div className="mt-10 flex items-center justify-between gap-4">
+          <div className="mt-9 flex items-center justify-between gap-4">
             <button
               type="button"
               onClick={() => {
                 setMode(isLogin ? 'register' : 'login')
                 setError(null)
               }}
-              className="mono-meta hover:text-ink cursor-pointer"
+              className="meta hover:text-ink cursor-pointer"
             >
               {isLogin ? 'Need an account? Register' : 'Have an account? Sign in'}
             </button>
-            <Button type="submit" loading={busy} size="lg" variant="primary">
+            <Button type="submit" loading={busy} size="lg">
               {isLogin ? 'Sign in' : 'Create'}
               <ArrowRight size={16} strokeWidth={1.75} />
             </Button>

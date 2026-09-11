@@ -11,15 +11,15 @@ type FieldShellProps = {
 export function FieldShell({ label, htmlFor, hint, error, children }: FieldShellProps) {
   return (
     <div className="flex flex-col gap-2">
-      <label htmlFor={htmlFor} className="mono-meta">
+      <label htmlFor={htmlFor} className="meta">
         {label}
       </label>
       {children}
       {hint && !error && (
-        <p className="text-[0.78rem] text-ink-mute leading-snug">{hint}</p>
+        <p className="text-[0.8rem] text-ink/55 leading-snug">{hint}</p>
       )}
       {error && (
-        <p className="text-[0.78rem] text-danger leading-snug" role="alert">
+        <p className="text-[0.8rem] text-[oklch(0.5_0.14_25)] leading-snug" role="alert">
           {error}
         </p>
       )}
@@ -41,7 +41,7 @@ export function Input({ label, hint, error, id, className = '', ...rest }: Input
         id={inputId}
         {...rest}
         aria-invalid={error ? true : undefined}
-        className={`bg-transparent border-b border-ink/40 focus:border-accent focus:outline-none py-2 text-base text-ink placeholder:text-ink-mute ${className}`}
+        className={`bg-transparent border-b border-ink/25 focus:border-link focus:outline-none py-2 text-base text-ink placeholder:text-ink/40 ${className}`}
       />
     </FieldShell>
   )
@@ -61,7 +61,7 @@ export function Textarea({ label, hint, error, id, className = '', ...rest }: Te
         id={inputId}
         {...rest}
         aria-invalid={error ? true : undefined}
-        className={`bg-paper-2/40 border border-rule focus:border-accent focus:outline-none p-4 text-base text-ink placeholder:text-ink-mute resize-y rounded-xs ${className}`}
+        className={`bg-inset border border-line-strong focus:border-link focus:outline-none px-5 py-4 text-[16px] leading-[1.78] text-ink placeholder:text-ink/40 resize-y rounded-xs ${className}`}
       />
     </FieldShell>
   )

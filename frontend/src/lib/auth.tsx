@@ -26,10 +26,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     staleTime: 5 * 60_000,
   })
 
-  // If /me returns 401, the token is stale — drop it.
+  // If /me returns 401, the token is stale — drop it. This effect legitimately syncs auth state to
+  // an external signal (a server 401), which is what effects are for; the rule only objects to the
+  // accompanying setState, so it is disabled narrowly here.
   useEffect(() => {
     if (meQuery.error instanceof ApiError && meQuery.error.status === 401) {
       tokenStore.clear()
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setToken(null)
       qc.removeQueries({ queryKey: ['me'] })
     }
@@ -72,6 +75,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
+// A context provider and its hook are conventionally co-located; Fast Refresh's component-only rule
+// does not apply to this shared hook.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const ctx = useContext(AuthContext)
   if (!ctx) throw new Error('useAuth must be used inside <AuthProvider>')
