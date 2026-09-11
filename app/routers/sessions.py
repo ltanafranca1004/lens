@@ -127,6 +127,7 @@ def submit_answer(
 ) -> Question:
     _, question = _get_owned_question(session_id, question_id, current_user, db)
 
+    # Fast fail (and skip a needless Groq call) when it is already answered/skipped.
     if question.skipped or question.user_answer is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -134,13 +135,34 @@ def submit_answer(
         )
 
     result = evaluate_answer(question.question_text, payload.answer)
-    question.user_answer = payload.answer
-    question.score = result["score"]
-    question.ai_feedback = result["feedback"]
-    question.rubric = result.get("rubric")
-    question.answered_at = datetime.now(timezone.utc)
+
+    # Commit the transition atomically: the WHERE re-checks the pre-state, so of two concurrent
+    # answer/skip requests only one wins and the other gets 409 — never skipped + answered together.
+    updated = (
+        db.query(Question)
+        .filter(
+            Question.id == question.id,
+            Question.user_answer.is_(None),
+            Question.skipped.is_(False),
+        )
+        .update(
+            {
+                Question.user_answer: payload.answer,
+                Question.score: result["score"],
+                Question.ai_feedback: result["feedback"],
+                Question.rubric: result.get("rubric"),
+                Question.answered_at: datetime.now(timezone.utc),
+            },
+            synchronize_session=False,
+        )
+    )
     db.commit()
-    db.refresh(question)
+    if updated == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This question has already been answered or skipped",
+        )
+    db.refresh(question)  # synchronize_session=False left the ORM object stale
     return question
 
 
@@ -159,8 +181,22 @@ def skip_question(
             detail="This question has already been answered or skipped",
         )
 
-    question.skipped = True
+    # Same atomic conditional update as submit_answer, so a concurrent answer can't slip in first.
+    updated = (
+        db.query(Question)
+        .filter(
+            Question.id == question.id,
+            Question.user_answer.is_(None),
+            Question.skipped.is_(False),
+        )
+        .update({Question.skipped: True}, synchronize_session=False)
+    )
     db.commit()
+    if updated == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This question has already been answered or skipped",
+        )
     db.refresh(question)
     return question
 
