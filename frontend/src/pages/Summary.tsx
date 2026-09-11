@@ -96,6 +96,16 @@ export function SummaryPage() {
         </aside>
       </header>
 
+      {/* What to study — grounded in the session's weakest rubric dimensions */}
+      {s.study_note && (
+        <section className="mt-16 border-t border-rule pt-8">
+          <p className="mono-meta">What to study</p>
+          <p className="display-serif text-2xl leading-relaxed mt-3 text-ink max-w-prose">
+            {s.study_note}
+          </p>
+        </section>
+      )}
+
       {/* Per-question recap */}
       <section className="mt-16 space-y-12">
         {sorted.map((q, i) => (

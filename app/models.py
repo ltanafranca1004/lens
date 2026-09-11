@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -25,6 +26,7 @@ class Session(Base):
     status = Column(String, default="in_progress")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    study_note = Column(Text, nullable=True)
 
     user = relationship("User", back_populates="sessions")
     questions = relationship("Question", back_populates="session", cascade="all, delete-orphan")
@@ -39,6 +41,9 @@ class Question(Base):
     user_answer = Column(Text, nullable=True)
     ai_feedback = Column(Text, nullable=True)
     score = Column(Integer, nullable=True)
+    # Structured per-dimension rubric breakdown (completeness/substance/reasoning/correctness,
+    # each {score, evidence[], reasoning}) as returned by evaluate_answer. NULL until answered.
+    rubric = Column(JSONB, nullable=True)
     skipped = Column(Boolean, default=False)
     order_index = Column(Integer, nullable=False)
     answered_at = Column(DateTime(timezone=True), nullable=True)

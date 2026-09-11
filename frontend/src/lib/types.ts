@@ -18,6 +18,7 @@ export type SessionSummary = {
   status: SessionStatus
   created_at: string
   completed_at: string | null
+  study_note: string | null
 }
 
 export type Question = {

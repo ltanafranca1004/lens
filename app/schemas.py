@@ -54,6 +54,7 @@ class SessionOut(BaseModel):
     status: str
     created_at: datetime
     completed_at: datetime | None
+    study_note: str | None = None
 
     model_config = {"from_attributes": True}
 
