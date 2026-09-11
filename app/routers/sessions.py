@@ -81,6 +81,7 @@ def get_session(
         status=session.status,
         created_at=session.created_at,
         completed_at=session.completed_at,
+        study_note=session.study_note,
         questions=session.questions,
         average_score=average,
     )
