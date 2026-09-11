@@ -35,12 +35,24 @@ class AnswerSubmit(BaseModel):
     answer: str = Field(min_length=1, max_length=10000)
 
 
+class RubricDimensionOut(BaseModel):
+    """One rubric dimension as produced by evaluate_answer and stored on questions.rubric."""
+
+    score: int
+    evidence: list[str]
+    reasoning: str
+
+
 class QuestionOut(BaseModel):
     id: int
     question_text: str
     user_answer: str | None
     ai_feedback: str | None
     score: int | None
+    # Per-dimension breakdown (completeness/substance/reasoning/correctness), each with
+    # score/evidence/reasoning. NULL until the question is answered. Read straight off the JSONB
+    # column via from_attributes; Pydantic coerces each value into RubricDimensionOut.
+    rubric: dict[str, RubricDimensionOut] | None = None
     skipped: bool
     order_index: int
     answered_at: datetime | None
