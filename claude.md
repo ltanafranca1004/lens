@@ -40,7 +40,7 @@ A web app that prepares job seekers for technical interviews by generating role-
 | Password hashing | bcrypt                                          | Intentionally slow, salted, brute-force resistant              |
 | AI               | Groq API (openai/gpt-oss-120b)              | Generates questions and evaluates answers (free tier)          |
 | Frontend         | React                                           | Portfolio value, co-op resume signal, needed for iOS API layer |
-| Deployment       | Railway                                         | Simple setup, auto-detects FastAPI, free tier                  |
+| Deployment       | AWS (RDS + Elastic Beanstalk)                   | Managed Postgres via RDS; FastAPI runs on Elastic Beanstalk     |
 
 ---
 
