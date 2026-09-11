@@ -99,7 +99,7 @@ function AnswerForm({
           value={answer}
           onChange={(e) => onChange(e.target.value)}
           error={localError ?? serverError ?? undefined}
-          disabled={scoring}
+          disabled={scoring || skipping}
         />
         <div className="flex items-center justify-between gap-4 mt-4">
           <span className="meta">
@@ -114,7 +114,7 @@ function AnswerForm({
               <Button type="button" variant="ghost" size="md" onClick={onSkip} loading={skipping}>
                 Skip this one
               </Button>
-              <Button type="submit" size="lg">
+              <Button type="submit" size="lg" disabled={skipping}>
                 Submit answer
                 <ArrowRight size={16} strokeWidth={1.75} />
               </Button>
@@ -155,12 +155,14 @@ export function InterviewPage() {
     return idx === -1 ? Math.max(questions.length - 1, 0) : idx
   }, [questions])
 
-  // Set the resume point once, when the session first loads. Thereafter the cursor is entirely
+  // Set the resume point once per session, when it first loads. Thereafter the cursor is entirely
   // user-driven (Previous/Next) — submitting keeps it in place so the feedback stays on screen.
+  // Tracking the session it was resumed for (not a bare boolean) re-applies initialIndex when the
+  // route param changes, since /interview/:id reuses this component across sessions.
   const [cursor, setCursor] = useState(0)
-  const [resumed, setResumed] = useState(false)
-  if (!resumed && questions.length > 0) {
-    setResumed(true)
+  const [resumedFor, setResumedFor] = useState<number | null>(null)
+  if (resumedFor !== sessionId && questions.length > 0) {
+    setResumedFor(sessionId)
     setCursor(initialIndex)
   }
 
