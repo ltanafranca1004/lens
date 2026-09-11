@@ -3,14 +3,11 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowRight } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
+import { roleLabel } from '@/lib/rubric'
 import type { SessionSummary } from '@/lib/types'
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-US', {
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-  })
+  return new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 }
 
 export function HistoryPage() {
@@ -18,16 +15,15 @@ export function HistoryPage() {
     queryKey: ['sessions'],
     queryFn: () => api<SessionSummary[]>('/sessions'),
   })
-
   const sessions = sessionsQuery.data ?? []
 
   return (
-    <div className="max-w-5xl mx-auto px-6 lg:px-10 py-12 lg:py-16">
-      <div className="flex items-end justify-between border-b border-rule pb-6">
+    <div>
+      <div className="flex items-baseline justify-between gap-4">
         <div>
-          <p className="mono-meta">The Archive</p>
-          <h1 className="display-serif text-5xl lg:text-6xl leading-[1.02] mt-3">
-            Past sessions, <span className="italic text-accent">filed</span>.
+          <p className="meta">The archive</p>
+          <h1 className="font-serif font-normal text-[2.6rem] leading-[1.08] mt-2">
+            Past sessions.
           </h1>
         </div>
         <Link to="/" className="no-underline hidden sm:block">
@@ -38,16 +34,12 @@ export function HistoryPage() {
         </Link>
       </div>
 
-      {sessionsQuery.isLoading && (
-        <p className="mono-meta py-16">Loading archive…</p>
-      )}
+      {sessionsQuery.isLoading && <p className="meta mt-10">Loading the archive…</p>}
 
       {!sessionsQuery.isLoading && sessions.length === 0 && (
-        <div className="py-24 text-center">
-          <p className="mono-meta">Nothing on file</p>
-          <p className="display-serif text-2xl mt-3 text-ink-soft italic">
-            Begin your first session.
-          </p>
+        <div className="py-16 text-center">
+          <p className="meta">Nothing on file</p>
+          <p className="font-serif italic text-2xl mt-2 text-ink-soft">Begin your first session.</p>
           <div className="mt-6 inline-block">
             <Link to="/" className="no-underline">
               <Button size="md">
@@ -60,25 +52,20 @@ export function HistoryPage() {
       )}
 
       {sessions.length > 0 && (
-        <ul className="divide-y divide-rule mt-2">
+        <ul className="mt-6">
           {sessions.map((s) => (
             <li key={s.id}>
               <Link
                 to={`/sessions/${s.id}`}
-                className="grid grid-cols-12 gap-4 py-6 no-underline group items-baseline hover:bg-paper-2/40 px-2 -mx-2 transition-colors"
+                className="no-underline grid grid-cols-[1fr_auto] gap-x-5 gap-y-1 items-baseline py-4 pl-4 border-l-2 border-line mb-1.5 hover:border-link hover:bg-panel/60 transition-colors"
               >
-                <span className="col-span-2 sm:col-span-1 font-mono text-[0.7rem] tracking-[0.14em] text-ink-mute">
-                  #{String(s.id).padStart(3, '0')}
+                <span className="text-[15px] text-ink line-clamp-1">
+                  {roleLabel(s.job_posting, s.id)}
                 </span>
-                <span className="col-span-7 sm:col-span-8 display-serif text-lg leading-snug text-ink line-clamp-2 group-hover:text-accent">
-                  {s.job_posting}
-                </span>
-                <span className="col-span-3 sm:col-span-2 mono-meta text-right">
-                  {formatDate(s.created_at)}
-                </span>
-                <span className="col-span-12 sm:col-span-1 mono-meta text-right">
+                <span className="meta whitespace-nowrap">
                   {s.status === 'completed' ? 'Filed' : 'Open'}
                 </span>
+                <span className="meta col-span-2">{formatDate(s.created_at)}</span>
               </Link>
             </li>
           ))}

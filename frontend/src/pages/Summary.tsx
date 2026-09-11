@@ -1,21 +1,39 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, RotateCcw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
+import { MarkedUpText } from '@/components/MarkedUpText'
+import { AnswerFeedback } from '@/components/AnswerFeedback'
+import { DIMS, dimensionAverages, legendDot, roleLabel } from '@/lib/rubric'
 import type { SessionDetail } from '@/lib/types'
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
+  return new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+}
+
+function Legend() {
+  return (
+    <div className="flex flex-wrap gap-x-5 gap-y-2 mt-5">
+      {DIMS.map(({ key, label }) => (
+        <span key={key} className="flex items-center gap-2 text-[12.5px] text-ink-soft">
+          <span className="w-4 h-[11px] rounded-[1px]" style={{ background: legendDot(key) }} />
+          {label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function excerptOf(answer: string) {
+  return answer.length > 260 ? answer.slice(0, 258).trimEnd() + '…' : answer
 }
 
 export function SummaryPage() {
   const { id } = useParams<{ id: string }>()
   const sessionId = Number(id)
+  const [openId, setOpenId] = useState<number | null>(null)
 
   const sessionQuery = useQuery({
     queryKey: ['session', sessionId],
@@ -23,138 +41,129 @@ export function SummaryPage() {
     enabled: Number.isFinite(sessionId),
   })
 
-  if (sessionQuery.isLoading) {
-    return <div className="max-w-4xl mx-auto px-6 py-24 mono-meta">Loading…</div>
-  }
+  if (sessionQuery.isLoading) return <p className="meta">Loading…</p>
   if (!sessionQuery.data) {
     return (
-      <div className="max-w-4xl mx-auto px-6 py-24">
-        <p className="mono-meta">Error</p>
-        <p className="mt-3">This session can&rsquo;t be loaded.</p>
+      <div>
+        <p className="meta">Error</p>
+        <p className="mt-3 text-ink-soft">This session can&rsquo;t be loaded.</p>
       </div>
     )
   }
 
   const s = sessionQuery.data
   const sorted = [...s.questions].sort((a, b) => a.order_index - b.order_index)
-  const answered = sorted.filter((q) => q.user_answer !== null && !q.skipped)
-  const skipped = sorted.filter((q) => q.skipped)
+  const role = roleLabel(s.job_posting, s.id)
   const avg = s.average_score
-  const isFiled = s.status === 'completed'
+  const { steadiest, thinnest } = dimensionAverages(sorted)
+  const indexOfId = (qid: number) => sorted.findIndex((q) => q.id === qid) + 1
+
+  // Expanded single-answer view (design 3d, reached from a summary row).
+  const open = openId !== null ? sorted.find((q) => q.id === openId) : undefined
+  if (open) {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => setOpenId(null)}
+          className="text-[13px] text-link hover:text-ink cursor-pointer"
+        >
+          ← back to all five
+        </button>
+        <p className="meta mt-6">Question {indexOfId(open.id)} of {sorted.length}</p>
+        <h2 className="font-serif font-normal text-[1.8rem] leading-[1.25] mt-2 max-w-[44ch]">
+          {open.question_text}
+        </h2>
+        <div className="mt-6">
+          <AnswerFeedback question={open} />
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="max-w-4xl mx-auto px-6 lg:px-10 py-12 lg:py-16">
-      {/* Folio */}
-      <div className="flex items-center justify-between mono-meta border-b border-rule pb-3">
-        <span>
-          Session #{String(s.id).padStart(3, '0')} · {isFiled ? 'Filed' : 'Open'}
-        </span>
-        <span>{formatDate(s.created_at)}</span>
+    <div>
+      <div className="flex items-baseline justify-between gap-4 meta">
+        <span>Session {s.id} · {role}</span>
+        <span>{formatDate(s.created_at)}{avg !== null && ` · ${avg.toFixed(1)} of 5`}</span>
       </div>
 
-      {/* Headline */}
-      <header className="mt-12 grid lg:grid-cols-12 gap-10">
-        <div className="lg:col-span-8">
-          <p className="mono-meta">A session in review</p>
-          <h1 className="display-serif text-5xl lg:text-6xl leading-[1.02] mt-4">
-            <span className="italic text-accent">Five</span> questions,
-            <br />
-            quietly examined.
-          </h1>
-          <p className="mt-6 text-base leading-relaxed text-ink-soft max-w-prose">
-            {s.job_posting.length > 240
-              ? s.job_posting.slice(0, 240) + '…'
-              : s.job_posting}
-          </p>
-        </div>
-        <aside className="lg:col-span-4 border-l border-rule lg:pl-8">
-          <p className="mono-meta">Average</p>
-          {avg !== null ? (
-            <div className="mt-3 flex items-baseline gap-2">
-              <span className="font-mono text-[3.6rem] leading-none text-accent">
-                {avg.toFixed(1)}
-              </span>
-              <span className="font-mono text-base text-ink-mute">/05</span>
-            </div>
-          ) : (
-            <p className="mt-3 display-serif text-2xl text-ink-soft italic">No marks yet.</p>
-          )}
-          <dl className="mt-8 space-y-2 text-sm">
-            <div className="flex justify-between">
-              <dt className="mono-meta">Answered</dt>
-              <dd className="font-mono">{String(answered.length).padStart(2, '0')}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="mono-meta">Skipped</dt>
-              <dd className="font-mono">{String(skipped.length).padStart(2, '0')}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="mono-meta">Total</dt>
-              <dd className="font-mono">{String(sorted.length).padStart(2, '0')}</dd>
-            </div>
-          </dl>
-        </aside>
-      </header>
+      <h1 className="font-serif font-normal text-[2.6rem] sm:text-[2.9rem] leading-[1.08] mt-4">
+        Your own words, marked up.
+      </h1>
+      <p className="text-[15px] leading-[1.6] text-ink-soft max-w-[58ch] mt-3 [text-wrap:pretty]">
+        Every score points at a phrase you actually wrote.
+        {steadiest && thinnest && steadiest.key !== thinnest.key && (
+          <>
+            {' '}Steadiest here is {steadiest.label.toLowerCase()} at {steadiest.avg.toFixed(1)};{' '}
+            {thinnest.label.toLowerCase()}, at {thinnest.avg.toFixed(1)}, is where these answers thin
+            out.
+          </>
+        )}
+      </p>
 
-      {/* What to study — grounded in the session's weakest rubric dimensions */}
+      <Legend />
+
+      <div className="mt-7">
+        {sorted.map((q) => {
+          if (q.skipped) {
+            return (
+              <div key={q.id} className="py-5 pl-[22px] border-l-2 border-line mb-1.5">
+                <span className="text-[14px] font-medium text-ink-soft line-clamp-2">
+                  {q.question_text}
+                </span>
+                <p className="font-serif italic text-ink/55 mt-2">Set aside.</p>
+              </div>
+            )
+          }
+          if (q.user_answer === null) return null
+          return (
+            <button
+              key={q.id}
+              type="button"
+              onClick={() => setOpenId(q.id)}
+              className="w-full text-left py-5 pl-[22px] pr-4 border-l-2 border-line mb-1.5 cursor-pointer hover:border-link hover:bg-panel/60 transition-colors"
+            >
+              <div className="flex items-baseline justify-between gap-6">
+                <span className="text-[14px] font-medium text-ink-soft leading-snug max-w-[70ch] line-clamp-2 [text-wrap:pretty]">
+                  {q.question_text}
+                </span>
+                <span className="font-serif text-[1.35rem] whitespace-nowrap text-ink-soft">
+                  {q.score}
+                  <span className="text-[13px] text-ink/55"> of 5</span>
+                </span>
+              </div>
+              <p className="font-serif text-[1.1rem] leading-[1.72] mt-2.5 text-ink [text-wrap:pretty]">
+                <MarkedUpText answer={excerptOf(q.user_answer)} rubric={q.rubric} />
+              </p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
+                {DIMS.map(({ key, label }) => {
+                  const dim = q.rubric?.[key]
+                  if (!dim) return null
+                  return (
+                    <span key={key} className="flex items-center gap-1.5 text-[12.5px] text-ink-soft">
+                      <span className="w-[9px] h-[9px] rounded-[1px]" style={{ background: legendDot(key) }} />
+                      {label} {dim.score}
+                    </span>
+                  )
+                })}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
       {s.study_note && (
-        <section className="mt-16 border-t border-rule pt-8">
-          <p className="mono-meta">What to study</p>
-          <p className="display-serif text-2xl leading-relaxed mt-3 text-ink max-w-prose">
+        <section className="mt-7 bg-panel px-6 py-5 rounded-sm">
+          <p className="text-[13px] font-semibold">What to study next</p>
+          <p className="font-serif text-[1.15rem] leading-[1.62] mt-2 max-w-[70ch] [text-wrap:pretty]">
             {s.study_note}
           </p>
         </section>
       )}
 
-      {/* Per-question recap */}
-      <section className="mt-16 space-y-12">
-        {sorted.map((q, i) => (
-          <article key={q.id} className="grid lg:grid-cols-12 gap-8 border-t border-rule pt-8">
-            <div className="lg:col-span-2 mono-meta">Q {String(i + 1).padStart(2, '0')}</div>
-            <div className="lg:col-span-10 space-y-6">
-              <h2 className="display-serif text-2xl leading-snug text-ink">
-                {q.question_text}
-              </h2>
-
-              {q.skipped && (
-                <p className="display-serif italic text-ink-soft">Set aside.</p>
-              )}
-
-              {!q.skipped && q.user_answer && (
-                <>
-                  <div className="grid sm:grid-cols-12 gap-6">
-                    <div className="sm:col-span-3">
-                      <p className="mono-meta">Score</p>
-                      <div className="mt-2 flex items-baseline gap-1.5">
-                        <span className="font-mono text-3xl text-accent">
-                          {String(q.score ?? 0).padStart(2, '0')}
-                        </span>
-                        <span className="font-mono text-sm text-ink-mute">/05</span>
-                      </div>
-                    </div>
-                    <div className="sm:col-span-9">
-                      <p className="mono-meta">Your answer</p>
-                      <p className="mt-2 text-sm leading-relaxed text-ink-soft whitespace-pre-wrap">
-                        {q.user_answer}
-                      </p>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="mono-meta">Field notes</p>
-                    <p className="display-serif text-lg leading-relaxed mt-2 text-ink">
-                      {q.ai_feedback}
-                    </p>
-                  </div>
-                </>
-              )}
-            </div>
-          </article>
-        ))}
-      </section>
-
-      {/* Footer actions */}
-      <div className="mt-16 pt-6 border-t border-rule flex items-center justify-between">
-        <Link to="/history" className="mono-meta no-underline hover:text-ink flex items-center gap-2">
+      <div className="mt-10 pt-6 border-t border-line flex items-center justify-between">
+        <Link to="/history" className="meta hover:text-ink no-underline flex items-center gap-2">
           <ArrowLeft size={14} strokeWidth={1.75} /> Archive
         </Link>
         <Link to="/" className="no-underline">

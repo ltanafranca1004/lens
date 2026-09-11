@@ -1,15 +1,18 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, NotebookPen } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
-import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Field'
+import { roleLabel } from '@/lib/rubric'
 import type { Question, SessionSummary } from '@/lib/types'
 
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
+}
+
 export function HomePage() {
-  const { user } = useAuth()
   const nav = useNavigate()
   const qc = useQueryClient()
   const [posting, setPosting] = useState('')
@@ -19,8 +22,7 @@ export function HomePage() {
     queryKey: ['sessions'],
     queryFn: () => api<SessionSummary[]>('/sessions'),
   })
-
-  const recent = sessionsQuery.data?.slice(0, 3) ?? []
+  const recent = sessionsQuery.data?.slice(0, 4) ?? []
 
   const startMutation = useMutation({
     mutationFn: async (jobPosting: string) => {
@@ -35,9 +37,7 @@ export function HomePage() {
       qc.invalidateQueries({ queryKey: ['sessions'] })
       nav(`/interview/${session.id}`)
     },
-    onError: (err) => {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong')
-    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'Something went wrong'),
   })
 
   const onSubmit = (e: React.FormEvent) => {
@@ -50,91 +50,63 @@ export function HomePage() {
     startMutation.mutate(posting)
   }
 
-  const charCount = posting.length
-
   return (
-    <div className="max-w-6xl mx-auto px-6 lg:px-10 py-12 lg:py-16">
-      <div className="grid lg:grid-cols-12 gap-12">
-        {/* Lede column */}
-        <div className="lg:col-span-5 space-y-7">
-          <p className="mono-meta">No. 01 — Begin</p>
-          <h1 className="display-serif text-5xl lg:text-6xl leading-[1.02]">
-            Welcome,
-            <br />
-            <span className="italic text-accent">{user?.display_name?.split(' ')[0] ?? 'there'}.</span>
-          </h1>
-          <p className="text-lg leading-relaxed text-ink-soft max-w-prose">
-            Paste a job posting on the right. Lens will compose five questions
-            shaped to that role and hand them back to you, one at a time.
-          </p>
-          <div className="border-t border-rule pt-5 mono-meta">
-            <span className="block">A few rules of the house</span>
-            <ul className="mt-3 space-y-1.5 text-ink-soft normal-case tracking-normal text-sm">
-              <li>— Five questions per session.</li>
-              <li>— Skip what you can&rsquo;t answer.</li>
-              <li>— Read the feedback slowly.</li>
-            </ul>
-          </div>
+    <div>
+      <h1 className="font-serif font-normal text-[2.6rem] sm:text-[2.9rem] leading-[1.08] max-w-[18ch]">
+        What are you interviewing for?
+      </h1>
+      <p className="text-[15.5px] leading-[1.62] text-ink-soft max-w-[58ch] mt-3 [text-wrap:pretty]">
+        Paste the posting and Lens writes five questions shaped to that role. You type your answers,
+        one at a time, and get the reasoning behind every score.
+      </p>
+
+      <form onSubmit={onSubmit} className="mt-8">
+        <Textarea
+          label="The posting"
+          hint="Longer postings make sharper questions."
+          rows={12}
+          placeholder={
+            'Backend Engineer (Co-op), Acme Inc.\n\nYou will work on Python services using FastAPI and PostgreSQL…'
+          }
+          value={posting}
+          onChange={(e) => setPosting(e.target.value)}
+          error={error ?? undefined}
+        />
+        <div className="flex items-center justify-between gap-4 mt-5">
+          <span className="meta hidden sm:inline">
+            Five questions · no timer · leave any one unanswered
+          </span>
+          <Button type="submit" size="lg" loading={startMutation.isPending}>
+            Begin session
+            <ArrowRight size={16} strokeWidth={1.75} />
+          </Button>
         </div>
+      </form>
 
-        {/* Form column */}
-        <form onSubmit={onSubmit} className="lg:col-span-7 space-y-6">
-          <div className="flex items-center justify-between mono-meta">
-            <span>The posting</span>
-            <span>{charCount.toLocaleString()} ch.</span>
-          </div>
-
-          <Textarea
-            label="Paste here"
-            rows={14}
-            placeholder={`Paste the full job posting…\n\nExample:\n\n"Backend Engineer (Co-op), Acme Inc.\nYou will work on Python services using FastAPI and PostgreSQL…"`}
-            value={posting}
-            onChange={(e) => setPosting(e.target.value)}
-            error={error ?? undefined}
-            hint="Longer postings yield more pointed questions."
-          />
-
-          <div className="flex items-center justify-end gap-4">
-            <Button
-              type="submit"
-              size="lg"
-              loading={startMutation.isPending}
-              disabled={posting.trim().length < 20}
-            >
-              <NotebookPen size={16} strokeWidth={1.75} />
-              Begin session
-              <ArrowRight size={16} strokeWidth={1.75} />
-            </Button>
-          </div>
-
-          {recent.length > 0 && (
-            <div className="border-t border-rule pt-6 mt-10">
-              <p className="mono-meta mb-4">Recently filed</p>
-              <ul className="divide-y divide-rule-soft">
-                {recent.map((s) => (
-                  <li key={s.id} className="py-3 flex items-baseline justify-between gap-6">
-                    <button
-                      type="button"
-                      onClick={() => nav(`/sessions/${s.id}`)}
-                      className="text-left flex-1 min-w-0 cursor-pointer hover:text-accent"
-                    >
-                      <span className="font-mono text-[0.7rem] tracking-[0.14em] text-ink-mute mr-3 align-middle">
-                        #{String(s.id).padStart(3, '0')}
-                      </span>
-                      <span className="display-serif text-lg leading-snug align-middle line-clamp-1">
-                        {s.job_posting.slice(0, 90)}…
-                      </span>
-                    </button>
-                    <span className="mono-meta whitespace-nowrap">
-                      {s.status === 'completed' ? 'Filed' : 'Open'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </form>
-      </div>
+      {recent.length > 0 && (
+        <section className="mt-11">
+          <p className="meta">Earlier sessions</p>
+          <ul className="mt-2">
+            {recent.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  onClick={() => nav(`/sessions/${s.id}`)}
+                  className="w-full text-left grid grid-cols-[1fr_auto] gap-x-5 gap-y-1 items-baseline py-3.5 pl-4 border-l-2 border-line cursor-pointer hover:border-link hover:bg-panel/50 transition-colors"
+                >
+                  <span className="text-[14.5px] text-ink line-clamp-1">
+                    {roleLabel(s.job_posting, s.id)}
+                  </span>
+                  <span className="meta whitespace-nowrap">
+                    {s.status === 'completed' ? 'Filed' : 'Open'}
+                  </span>
+                  <span className="meta col-span-2">{formatDate(s.created_at)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   )
 }

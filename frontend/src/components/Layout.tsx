@@ -1,76 +1,66 @@
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
-import { Button } from '@/components/ui/Button'
 
-function MastheadDate() {
-  const today = new Date().toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
-  return <span>{today}</span>
+function whenLabel() {
+  const now = new Date()
+  const weekday = now.toLocaleDateString('en-US', { weekday: 'long' })
+  const hour = now.getHours()
+  const part = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'
+  return `${weekday} ${part}`
 }
 
 export function Layout() {
   const { user, logout } = useAuth()
-  const loc = useLocation()
-  const issueNumber = String(user?.id ?? 0).padStart(3, '0')
 
   return (
     <div className="min-h-full flex flex-col">
-      <header className="border-b border-rule">
-        <div className="max-w-6xl mx-auto px-6 lg:px-10 pt-6 pb-4">
-          <div className="flex items-baseline justify-between mono-meta">
-            <span>Vol. I — Iss. {issueNumber}</span>
-            <MastheadDate />
-          </div>
-          <div className="flex items-end justify-between mt-3 gap-6">
-            <Link
+      <header className="border-b border-line bg-page/60">
+        <div className="max-w-[1000px] mx-auto px-6 sm:px-8 py-5 flex items-baseline justify-between gap-6">
+          <Link to="/" className="font-serif text-[1.7rem] leading-none text-ink no-underline">
+            Lens
+          </Link>
+          <nav className="flex items-baseline gap-5 sm:gap-6 meta">
+            <NavLink
               to="/"
-              className="display-serif text-[clamp(2.4rem,6vw,3.6rem)] leading-[0.95] text-ink no-underline"
-              style={{ fontVariationSettings: '"opsz" 144, "SOFT" 0' }}
+              end
+              className={({ isActive }) =>
+                `no-underline ${isActive ? 'text-ink' : 'hover:text-ink'}`
+              }
             >
-              Lens
-            </Link>
-            <nav className="hidden sm:flex items-center gap-7 pb-2 mono-meta">
-              <NavLink
-                to="/"
-                end
-                className={({ isActive }) =>
-                  `no-underline ${isActive ? 'text-ink' : 'text-ink-mute hover:text-ink'}`
-                }
-              >
-                New
-              </NavLink>
-              <NavLink
-                to="/history"
-                className={({ isActive }) =>
-                  `no-underline ${isActive ? 'text-ink' : 'text-ink-mute hover:text-ink'}`
-                }
-              >
-                Archive
-              </NavLink>
-              <span className="text-ink-mute">·</span>
-              <span className="text-ink-mute">{user?.display_name}</span>
-              <Button variant="ghost" size="sm" onClick={logout}>
-                Sign out
-              </Button>
-            </nav>
-          </div>
-          <p className="mono-meta mt-3">
-            A field journal for technical interviews — {loc.pathname === '/' ? 'No. 01' : 'continued'}
-          </p>
+              New
+            </NavLink>
+            <NavLink
+              to="/history"
+              className={({ isActive }) =>
+                `no-underline ${isActive ? 'text-ink' : 'hover:text-ink'}`
+              }
+            >
+              Archive
+            </NavLink>
+            {user && (
+              <span className="hidden sm:inline">
+                {user.display_name} · {whenLabel()}
+              </span>
+            )}
+            <button type="button" onClick={logout} className="cursor-pointer hover:text-ink">
+              Sign out
+            </button>
+          </nav>
         </div>
       </header>
 
-      <main className="flex-1">
-        <Outlet />
+      <main className="flex-1 w-full">
+        <div className="max-w-[1000px] mx-auto px-4 sm:px-6 py-6 sm:py-10">
+          <div className="bg-paper border border-line rounded-sm px-6 sm:px-12 py-9 sm:py-12">
+            <Outlet />
+          </div>
+        </div>
       </main>
 
-      <footer className="border-t border-rule mt-16">
-        <div className="max-w-6xl mx-auto px-6 lg:px-10 py-6 mono-meta flex justify-between">
-          <span>Lens · Field Notes</span>
-          <span>Set in Fraunces &amp; IBM Plex</span>
+      <footer className="border-t border-line">
+        <div className="max-w-[1000px] mx-auto px-6 sm:px-8 py-5 meta flex justify-between">
+          <span>Lens · interview practice</span>
+          <span className="hidden sm:inline">Set in Newsreader &amp; Public Sans</span>
         </div>
       </footer>
     </div>
