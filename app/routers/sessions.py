@@ -172,12 +172,14 @@ def complete_session(
     current_user: User = Depends(get_current_user),
 ) -> Session:
     session = _get_owned_session(session_id, current_user, db)
+    was_in_progress = session.status == "in_progress"
     session.status = "completed"
     session.completed_at = datetime.now(timezone.utc)
 
-    # Generate the "what to study" note once, on the first completion. A Groq failure must not
-    # block completing the session, so we swallow it and leave study_note NULL (no retry in V1).
-    if session.study_note is None:
+    # Generate the "what to study" note once, only on the in_progress -> completed transition, so a
+    # Groq failure is never retried on a repeated PATCH (no retry in V1) and an already-completed
+    # session is never regenerated. A failure leaves study_note NULL without blocking completion.
+    if was_in_progress:
         try:
             session.study_note = build_study_note(session.questions)
         except RuntimeError:

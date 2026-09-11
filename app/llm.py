@@ -354,6 +354,7 @@ def evaluate_answer(question: str, answer: str) -> dict:
 
 
 def _mock_generate_study_note(weak_areas: list[dict]) -> str:
+    """Deterministic canned study note for USE_MOCK_LLM=true, naming the weak dimension(s)."""
     names = [_DISPLAY.get(a["dimension"], a["dimension"]) for a in weak_areas]
     joined = names[0] if len(names) == 1 else " and ".join(names)
     return (
@@ -380,6 +381,7 @@ def _build_study_system_prompt() -> str:
 
 
 def _build_study_user_message(weak_areas: list[dict]) -> str:
+    """Weak dimensions with their evidence/reasoning as clearly-delimited DATA (never instructions)."""
     blocks = []
     for area in weak_areas:
         label = _DISPLAY.get(area["dimension"], area["dimension"])
