@@ -1,5 +1,11 @@
 const TOKEN_KEY = 'lens.token'
-const DEFAULT_TIMEOUT_MS = 15_000
+// Render free tier cold-starts (~30-60s) after 15 min idle, so allow a generous
+// window before treating a request as timed out.
+const DEFAULT_TIMEOUT_MS = 60_000
+
+// Backend base URL. Empty in local dev (requests fall through the Vite proxy);
+// set to the Render URL via VITE_API_URL in production.
+const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
 
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
@@ -27,7 +33,7 @@ async function fetchWithTimeout(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(path, { ...init, signal: controller.signal })
+    return await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal })
   } catch (err) {
     if (controller.signal.aborted) {
       throw new ApiError(`Request timed out after ${timeoutMs} ms`, 0)
