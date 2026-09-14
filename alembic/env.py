@@ -20,6 +20,9 @@ config = context.config
 database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise RuntimeError("DATABASE_URL is not set in the environment")
+if database_url.startswith("postgres://"):
+    # SQLAlchemy 2.x requires the postgresql:// scheme.
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
 config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.
