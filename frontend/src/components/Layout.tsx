@@ -19,33 +19,35 @@ export function Layout() {
           <Link to="/" className="font-serif text-[1.7rem] leading-none text-ink no-underline">
             Lens
           </Link>
-          <nav className="flex items-baseline gap-5 sm:gap-6 meta">
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) =>
-                `no-underline ${isActive ? 'text-ink' : 'hover:text-ink'}`
-              }
-            >
-              New
-            </NavLink>
-            <NavLink
-              to="/history"
-              className={({ isActive }) =>
-                `no-underline ${isActive ? 'text-ink' : 'hover:text-ink'}`
-              }
-            >
-              Archive
-            </NavLink>
+          <div className="flex items-baseline gap-5 sm:gap-6">
             {user && (
-              <span className="hidden sm:inline">
+              <span className="hidden sm:inline meta sm:border-r sm:border-line sm:pr-5 md:pr-6">
                 {user.display_name} · {whenLabel()}
               </span>
             )}
-            <button type="button" onClick={logout} className="cursor-pointer hover:text-ink">
-              Sign out
-            </button>
-          </nav>
+            <nav className="flex items-baseline gap-5 sm:gap-6 meta">
+              <NavLink
+                to="/"
+                end
+                className={({ isActive }) =>
+                  `no-underline ${isActive ? 'text-ink' : 'hover:text-ink'}`
+                }
+              >
+                New
+              </NavLink>
+              <NavLink
+                to="/history"
+                className={({ isActive }) =>
+                  `no-underline ${isActive ? 'text-ink' : 'hover:text-ink'}`
+                }
+              >
+                Archive
+              </NavLink>
+              <button type="button" onClick={logout} className="cursor-pointer hover:text-ink">
+                Sign out
+              </button>
+            </nav>
+          </div>
         </div>
       </header>
 

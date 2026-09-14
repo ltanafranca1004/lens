@@ -33,6 +33,7 @@ function cleanPhrase(p: string): string {
   return p
     .replace(/^["'“‘\s]+/, '')
     .replace(/["'”’\s]+$/, '')
+    .replace(/^(?:…|\.\.\.)\s*/, '')
     .replace(/\s*(?:…|\.\.\.)$/, '')
     .trim()
 }
@@ -126,12 +127,19 @@ export function deriveVerdict(question: Question): string {
   const values = Object.values(scores)
   if (values.length === 0) return ''
 
-  const correctness = scores.correctness
+  // A weak *central* dimension (correctness or completeness) caps the overall below the raw
+  // average; when it did, say so explicitly so the number and the words agree. Mirrors
+  // _combine_overall in app/llm.py. Completeness wins ties — "did you answer the question" is the
+  // signal a student most needs to hear.
   const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length)
-  if (typeof correctness === 'number' && correctness <= 2 && typeof question.score === 'number') {
-    const cap = correctness === 1 ? 2 : 3
-    if (avg > cap) {
-      return `Correctness held this to ${question.score} of 5 — a weak central claim caps the whole answer, however strong the rest.`
+  if (typeof question.score === 'number') {
+    const ceiling = (s?: number) => (s === 1 ? 2 : s === 2 ? 3 : 5)
+    const compCap = ceiling(scores.completeness)
+    const corrCap = ceiling(scores.correctness)
+    if (avg > Math.min(compCap, corrCap)) {
+      return compCap <= corrCap
+        ? `Completeness held this to ${question.score} of 5 — an answer that doesn’t fully address the question caps the score, however strong the rest.`
+        : `Correctness held this to ${question.score} of 5 — a weak central claim caps the whole answer, however strong the rest.`
     }
   }
 

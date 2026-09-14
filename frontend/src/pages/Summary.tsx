@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, RotateCcw } from 'lucide-react'
+import { ArrowLeft, ArrowRight, RotateCcw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { MarkedUpText } from '@/components/MarkedUpText'
@@ -103,6 +103,20 @@ export function SummaryPage() {
       </p>
 
       <Legend />
+
+      {s.status === 'in_progress' && (
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 bg-panel px-5 py-4 rounded-sm">
+          <p className="text-[14px] text-ink-soft">
+            This session is still open — you can pick up where you left off.
+          </p>
+          <Link to={`/interview/${s.id}`} className="no-underline shrink-0">
+            <Button size="md">
+              Continue answering
+              <ArrowRight size={15} strokeWidth={1.75} />
+            </Button>
+          </Link>
+        </div>
+      )}
 
       <div className="mt-7">
         {sorted.map((q) => {

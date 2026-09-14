@@ -16,7 +16,7 @@ export function AnswerFeedback({ question }: { question: Question }) {
       </p>
 
       <div className="flex items-baseline gap-3 mt-7 pt-5 border-t border-line">
-        <span className="font-serif text-[2.4rem] leading-none">
+        <span className="font-serif text-[2.4rem] leading-none whitespace-nowrap">
           {question.score}
           <span className="text-base text-ink/55"> of 5</span>
         </span>
