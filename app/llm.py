@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 
@@ -283,6 +284,13 @@ def _parse_dim(obj, name: str, answer: str) -> dict:
     return {"score": score, "evidence": evidence, "reasoning": reasoning}
 
 
+def _round_half_up(x: float) -> int:
+    """Round to the nearest integer, rounding a .5 half UP (2.5 -> 3), to match the frontend's
+    Math.round. Python's built-in round() uses banker's rounding (2.5 -> 2), which would disagree
+    with the client on half-integer averages."""
+    return math.floor(x + 0.5)
+
+
 def _dimension_ceiling(score: int) -> int:
     """A weak *central* dimension caps the whole answer, however strong the rest: score 1 caps
     the overall at 2, score 2 caps it at 3, otherwise no cap (5)."""
@@ -299,14 +307,14 @@ def _combine_overall(scores: dict) -> int:
     correctness and completeness ceilings. A well-written answer that doesn't address the question
     (completeness 1) can no longer score highly, the same way a factually wrong one (correctness 1)
     can't."""
-    avg = round(sum(scores[d] for d in _RUBRIC_ORDER) / len(_RUBRIC_ORDER))
+    avg = _round_half_up(sum(scores[d] for d in _RUBRIC_ORDER) / len(_RUBRIC_ORDER))
     cap = min(_dimension_ceiling(scores["correctness"]), _dimension_ceiling(scores["completeness"]))
     return max(1, min(5, min(avg, cap)))
 
 
 def _build_feedback(overall: int, dims: dict) -> str:
     scores = {d: dims[d]["score"] for d in _RUBRIC_ORDER}
-    avg = round(sum(scores.values()) / len(_RUBRIC_ORDER))
+    avg = _round_half_up(sum(scores.values()) / len(_RUBRIC_ORDER))
     # Name whichever central dimension(s) actually pulled the overall below the raw average.
     ceilings = {d: _dimension_ceiling(scores[d]) for d in ("correctness", "completeness")}
     capping = [d for d, c in ceilings.items() if avg > c]

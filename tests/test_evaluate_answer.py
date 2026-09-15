@@ -61,6 +61,15 @@ class CombineOverall(unittest.TestCase):
         # avg of 4,4,3,4 = 3.75 -> 4, and no central dimension is <= 2
         self.assertEqual(L._combine_overall(_scores(4, 4, 3, 4)), 4)
 
+    def test_half_up_rounding_matches_frontend(self):
+        # Half-integer averages round UP to match the frontend's Math.round, not down via Python's
+        # banker's round. (2,4,2,2) averages 2.5 with the cap at 3 (both central dims are 2), so the
+        # overall must be 3 -- banker's rounding would have given 2 and disagreed with the client.
+        self.assertEqual(L._round_half_up(2.5), 3)
+        self.assertEqual(L._round_half_up(3.5), 4)
+        self.assertEqual(L._round_half_up(2.4), 2)
+        self.assertEqual(L._combine_overall(_scores(2, 4, 2, 2)), 3)
+
 
 class EvaluateAnswerWiring(unittest.TestCase):
     def test_completeness_1_caps_returned_score_end_to_end(self):
