@@ -98,6 +98,11 @@ const loadProgressCbs = new Set<(p: TtsProgress) => void>()
 const generateWaiters = new Map<number, { resolve: (r: SynthResult) => void; reject: (e: Error) => void }>()
 let nextGenerateId = 1
 
+// Synthesized audio, cached per text for the page's lifetime. Questions are static, so replaying the
+// same one (or returning to it) is instant — no re-synthesis. Playing WAV bytes into a Blob copies
+// them, so a cached ArrayBuffer stays reusable.
+const audioCache = new Map<string, SynthResult>()
+
 function getWorker(): Worker {
   if (!worker) {
     console.log('[tts] creating Kokoro worker')
@@ -136,16 +141,21 @@ function getWorker(): Worker {
     worker.onerror = (e) => {
       const err = new Error(`TTS worker error: ${e.message || 'unknown'}`)
       console.error('[tts]', err.message)
-      // Discard the dead worker so the next ensureKokoroLoaded() spawns a fresh one — otherwise a
-      // later call would post to a worker that can't respond and its waiter would hang forever.
-      const failedWorker = worker
-      worker = null
-      failedWorker?.terminate()
-      loadState = 'idle'
-      loadWaiters.forEach((w) => w.reject(err))
-      loadWaiters = []
+      // Fail any in-flight generate waiters so callers don't hang.
       generateWaiters.forEach((w) => w.reject(err))
       generateWaiters.clear()
+      // A Worker SURVIVES an uncaught runtime error and keeps handling messages. If the model already
+      // loaded, keep the worker AND its cached model — terminating here would force a full multi-minute
+      // re-download on the next play. Only discard a worker that never finished its initial load (it may
+      // be genuinely unusable, e.g. a module-load failure), so a retry can spawn a fresh one.
+      if (loadState === 'loading') {
+        const failedWorker = worker
+        worker = null
+        failedWorker?.terminate()
+        loadState = 'idle'
+        loadWaiters.forEach((w) => w.reject(err))
+        loadWaiters = []
+      }
     }
   }
   return worker
@@ -238,13 +248,20 @@ export async function speak(text: string, handlers: SpeakHandlers = {}, opts: Sp
 
   if (getTtsEngine() === 'kokoro') {
     try {
-      const { wav, peak } = await synthesizeKokoro(trimmed, opts)
-      if (req !== activeRequest) {
-        console.log('[tts] discarding stale Kokoro result')
-        return
+      let result = audioCache.get(trimmed)
+      if (result) {
+        console.log('[tts] audio cache hit — replay is instant')
+      } else {
+        result = await synthesizeKokoro(trimmed, opts)
+        if (req !== activeRequest) {
+          console.log('[tts] discarding stale Kokoro result')
+          return
+        }
+        audioCache.set(trimmed, result)
       }
-      assertAudible(peak)
-      await playWav(wav, handlers)
+      if (req !== activeRequest) return
+      assertAudible(result.peak)
+      await playWav(result.wav, handlers)
       return
     } catch (err) {
       if (req !== activeRequest) return // cancelled — don't fall back to a stale read
