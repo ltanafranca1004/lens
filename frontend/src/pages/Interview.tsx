@@ -1,11 +1,16 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Mic } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Field'
 import { AnswerFeedback } from '@/components/AnswerFeedback'
+import { DeliveryPanel } from '@/components/DeliveryPanel'
+import { QuestionAudioButton } from '@/components/QuestionAudioButton'
+import { VoiceAnswer } from '@/components/VoiceAnswer'
+import { useSpeechRecognition } from '@/hooks/useSpeechRecognition'
+import { computeDelivery, readDelivery, saveDelivery } from '@/lib/delivery'
 import { roleLabel } from '@/lib/rubric'
 import type { Question, SessionDetail } from '@/lib/types'
 
@@ -61,16 +66,51 @@ function AnswerForm({
 }) {
   const [answer, setAnswer] = useState(() => readDraft(sessionId, question.id))
   const [localError, setLocalError] = useState<string | null>(null)
+  const speech = useSpeechRecognition()
+  const baseRef = useRef('') // text already in the field when a recording began
+  const wasListening = useRef(false) // detects the stop transition, to snapshot delivery once
+
+  const persistDraft = useCallback(
+    (value: string) => {
+      try {
+        localStorage.setItem(draftKey(sessionId, question.id), value)
+      } catch {
+        /* storage unavailable — keep the in-memory draft */
+      }
+    },
+    [sessionId, question.id],
+  )
 
   const onChange = (value: string) => {
     setAnswer(value)
     if (localError) setLocalError(null)
-    try {
-      localStorage.setItem(draftKey(sessionId, question.id), value)
-    } catch {
-      /* storage unavailable — keep the in-memory draft */
-    }
+    persistDraft(value)
   }
+
+  const startVoice = () => {
+    baseRef.current = answer
+    speech.start()
+  }
+
+  // Live-append the recognized transcript to whatever was in the field when recording began, so
+  // dictation adds to (never wipes) typed text and the textarea stays the single source of truth.
+  useEffect(() => {
+    if (!speech.listening) return
+    const base = baseRef.current
+    const sep = base.trim() && !/\s$/.test(base) ? ' ' : ''
+    const next = base + sep + speech.transcript
+    setAnswer(next)
+    persistDraft(next)
+  }, [speech.transcript, speech.listening, persistDraft])
+
+  // On the stop transition, snapshot delivery metrics (pace + fillers) for the separate, unscored
+  // panel. Computed from the just-spoken transcript only; never sent to the backend.
+  useEffect(() => {
+    if (wasListening.current && !speech.listening && speech.transcript.trim()) {
+      saveDelivery(sessionId, question.id, computeDelivery(speech.transcript, speech.elapsedMs))
+    }
+    wasListening.current = speech.listening
+  }, [speech.listening, speech.transcript, speech.elapsedMs, sessionId, question.id])
 
   const words = answer.trim() ? answer.trim().split(/\s+/).length : 0
 
@@ -80,6 +120,12 @@ function AnswerForm({
         Write it the way you&rsquo;d say it out loud. Length isn&rsquo;t the point — one clear reason
         beats three claims.
       </p>
+
+      {speech.error && (
+        <p className="mt-4 text-[0.85rem] text-[oklch(0.5_0.14_25)]" role="alert">
+          {speech.error}
+        </p>
+      )}
 
       <form
         onSubmit={(e) => {
@@ -92,15 +138,33 @@ function AnswerForm({
         }}
         className="mt-6"
       >
-        <Textarea
-          label="Your answer"
-          rows={9}
-          placeholder="Take your time. Walk through it like you would in a real interview."
-          value={answer}
-          onChange={(e) => onChange(e.target.value)}
-          error={localError ?? serverError ?? undefined}
-          disabled={scoring || skipping}
-        />
+        {speech.listening ? (
+          <VoiceAnswer transcript={answer} onStop={speech.stop} />
+        ) : (
+          <>
+            <Textarea
+              label="Your answer"
+              rows={9}
+              placeholder="Take your time. Walk through it like you would in a real interview."
+              value={answer}
+              onChange={(e) => onChange(e.target.value)}
+              error={localError ?? serverError ?? undefined}
+              disabled={scoring || skipping}
+            />
+            {speech.isSupported && !speech.error && (
+              <button
+                type="button"
+                onClick={startVoice}
+                disabled={scoring || skipping}
+                className="mt-3 inline-flex items-center gap-2 text-sm text-link hover:text-ink cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Mic size={15} strokeWidth={1.75} />
+                {answer.trim() ? 'Add with your voice' : 'Answer with your voice'}
+              </button>
+            )}
+          </>
+        )}
+
         <div className="flex items-center justify-between gap-4 mt-4">
           <span className="meta">
             {words} {words === 1 ? 'word' : 'words'} · saved as you type
@@ -111,10 +175,17 @@ function AnswerForm({
             </span>
           ) : (
             <span className="flex items-center gap-5">
-              <Button type="button" variant="ghost" size="md" onClick={onSkip} loading={skipping}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="md"
+                onClick={onSkip}
+                loading={skipping}
+                disabled={speech.listening}
+              >
                 Skip this one
               </Button>
-              <Button type="submit" size="lg" disabled={skipping}>
+              <Button type="submit" size="lg" disabled={skipping || speech.listening}>
                 Submit answer
                 <ArrowRight size={16} strokeWidth={1.75} />
               </Button>
@@ -224,6 +295,9 @@ export function InterviewPage() {
   const isAnswered = current.user_answer !== null || current.skipped
   const allDone = questions.every((q) => q.user_answer !== null || q.skipped)
   const isLast = cursor === total - 1
+  // Delivery metrics are saved client-side while recording (voice answers only); show them beside
+  // the feedback. Absent for typed answers → the panel simply doesn't render.
+  const delivery = readDelivery(sessionId, current.id)
   const submitError =
     answerMutation.error instanceof ApiError
       ? answerMutation.error.message
@@ -246,12 +320,15 @@ export function InterviewPage() {
       </div>
 
       {/* Question */}
-      <h2
-        key={current.id}
-        className="font-serif font-normal text-[2rem] leading-[1.24] mt-5 max-w-[40ch] animate-[fade-in_500ms_ease]"
-      >
-        {current.question_text}
-      </h2>
+      <div className="mt-5 flex items-start gap-3">
+        <h2
+          key={current.id}
+          className="font-serif font-normal text-[2rem] leading-[1.24] max-w-[40ch] animate-[fade-in_500ms_ease]"
+        >
+          {current.question_text}
+        </h2>
+        <QuestionAudioButton key={`audio-${current.id}`} text={current.question_text} />
+      </div>
 
       {/* Answering (3b) */}
       {!isAnswered && (
@@ -281,6 +358,7 @@ export function InterviewPage() {
       {isAnswered && !current.skipped && current.score !== null && (
         <div className="mt-7">
           <AnswerFeedback question={current} />
+          {delivery && <DeliveryPanel metrics={delivery} />}
         </div>
       )}
 
