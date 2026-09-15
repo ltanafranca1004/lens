@@ -55,6 +55,7 @@ function AnswerForm({
   serverError,
   onSubmit,
   onSkip,
+  onListeningChange,
 }: {
   sessionId: number
   question: Question
@@ -63,6 +64,7 @@ function AnswerForm({
   serverError: string | null
   onSubmit: (text: string) => void
   onSkip: () => void
+  onListeningChange: (listening: boolean) => void
 }) {
   const [answer, setAnswer] = useState(() => readDraft(sessionId, question.id))
   const [localError, setLocalError] = useState<string | null>(null)
@@ -116,6 +118,13 @@ function AnswerForm({
     }
     wasListening.current = speech.listening
   }, [speech.listening, speech.transcript, speech.elapsedMs, sessionId, question.id])
+
+  // Report recording state up so the page can block question navigation while listening — changing
+  // questions unmounts this form and aborts recognition, which would drop the in-progress transcript.
+  useEffect(() => {
+    onListeningChange(speech.listening)
+  }, [speech.listening, onListeningChange])
+  useEffect(() => () => onListeningChange(false), [onListeningChange])
 
   const words = answer.trim() ? answer.trim().split(/\s+/).length : 0
 
@@ -237,6 +246,9 @@ export function InterviewPage() {
   // route param changes, since /interview/:id reuses this component across sessions.
   const [cursor, setCursor] = useState(0)
   const [resumedFor, setResumedFor] = useState<number | null>(null)
+  // Set by AnswerForm while a voice recording is active; blocks question navigation so we don't
+  // unmount the form (aborting recognition) mid-dictation.
+  const [recording, setRecording] = useState(false)
   if (resumedFor !== sessionId && questions.length > 0) {
     setResumedFor(sessionId)
     setCursor(initialIndex)
@@ -346,6 +358,7 @@ export function InterviewPage() {
           serverError={submitError}
           onSubmit={(text) => answerMutation.mutate(text)}
           onSkip={() => skipMutation.mutate()}
+          onListeningChange={setRecording}
         />
       )}
 
@@ -371,7 +384,7 @@ export function InterviewPage() {
       <div className="mt-11 pt-6 border-t border-line flex items-center justify-between">
         <button
           type="button"
-          disabled={cursor === 0}
+          disabled={cursor === 0 || recording}
           onClick={() => setCursor((c) => Math.max(0, c - 1))}
           className="meta hover:text-ink cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
         >
