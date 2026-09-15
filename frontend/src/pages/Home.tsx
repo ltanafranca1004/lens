@@ -6,6 +6,7 @@ import { api, ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Field'
 import { roleLabel } from '@/lib/rubric'
+import { useSlowNotice } from '@/lib/useSlowNotice'
 import type { Question, SessionSummary } from '@/lib/types'
 
 function formatDate(iso: string) {
@@ -39,6 +40,8 @@ export function HomePage() {
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : 'Something went wrong'),
   })
+
+  const slow = useSlowNotice(startMutation.isPending)
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -81,6 +84,11 @@ export function HomePage() {
             <ArrowRight size={16} strokeWidth={1.75} />
           </Button>
         </div>
+        {slow && (
+          <p className="mt-4 text-sm text-ink-soft" role="status">
+            Warming up — the first request can take up to a minute on the free tier.
+          </p>
+        )}
       </form>
 
       {recent.length > 0 && (
@@ -91,7 +99,9 @@ export function HomePage() {
               <li key={s.id}>
                 <button
                   type="button"
-                  onClick={() => nav(`/sessions/${s.id}`)}
+                  onClick={() =>
+                    nav(s.status === 'completed' ? `/sessions/${s.id}` : `/interview/${s.id}`)
+                  }
                   className="w-full text-left grid grid-cols-[1fr_auto] gap-x-5 gap-y-1 items-baseline py-3.5 pl-4 border-l-2 border-line cursor-pointer hover:border-link hover:bg-panel/50 transition-colors"
                 >
                   <span className="text-[14.5px] text-ink line-clamp-1">

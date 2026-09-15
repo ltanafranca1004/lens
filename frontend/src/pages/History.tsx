@@ -26,12 +26,14 @@ export function HistoryPage() {
             Past sessions.
           </h1>
         </div>
-        <Link to="/" className="no-underline hidden sm:block">
-          <Button size="md">
-            New session
-            <ArrowRight size={14} strokeWidth={1.75} />
-          </Button>
-        </Link>
+        {sessions.length > 0 && (
+          <Link to="/" className="no-underline hidden sm:block">
+            <Button size="md">
+              New session
+              <ArrowRight size={14} strokeWidth={1.75} />
+            </Button>
+          </Link>
+        )}
       </div>
 
       {sessionsQuery.isLoading && <p className="meta mt-10">Loading the archive…</p>}
@@ -56,7 +58,7 @@ export function HistoryPage() {
           {sessions.map((s) => (
             <li key={s.id}>
               <Link
-                to={`/sessions/${s.id}`}
+                to={s.status === 'completed' ? `/sessions/${s.id}` : `/interview/${s.id}`}
                 className="no-underline grid grid-cols-[1fr_auto] gap-x-5 gap-y-1 items-baseline py-4 pl-4 border-l-2 border-line mb-1.5 hover:border-link hover:bg-panel/60 transition-colors"
               >
                 <span className="text-[15px] text-ink line-clamp-1">

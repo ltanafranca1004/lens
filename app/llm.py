@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 
@@ -226,6 +227,22 @@ def _norm(s) -> str:
     return " ".join(str(s).lower().split())
 
 
+def _clean_phrase(p: str) -> str:
+    """Strip surrounding quotes (straight or curly) and leading/trailing ellipsis that a model
+    sometimes wraps around a quote, so the phrase still matches -- and is stored as -- the
+    candidate's own words. Repeats until neither wrapper remains, so nesting order (a quote inside
+    ellipsis, or ellipsis inside a quote) doesn't matter. Mirrors the frontend cleanPhrase in
+    frontend/src/lib/rubric.ts."""
+    prev = None
+    while prev != p:
+        prev = p
+        p = re.sub(r"^[\"'“‘\s]+", "", p)
+        p = re.sub(r"[\"'”’\s]+$", "", p)
+        p = re.sub(r"^(?:…|\.\.\.)\s*", "", p)
+        p = re.sub(r"\s*(?:…|\.\.\.)$", "", p)
+    return p.strip()
+
+
 def _is_single_sentence(answer: str) -> bool:
     """True when the answer has no internal sentence break (i.e. a single sentence).
 
@@ -255,41 +272,57 @@ def _parse_dim(obj, name: str, answer: str) -> dict:
         evidence = [evidence]
     if not isinstance(evidence, list):
         evidence = []
-    evidence = [str(e) for e in evidence]
-    # Keep only quotes that actually occur in the answer (whitespace/case-insensitive), so a
-    # fabricated or paraphrased model "quote" is never presented as the candidate's own words.
+    # Clean each quote (strip wrapping quotes/ellipsis, matching the frontend), then keep only the
+    # ones that actually occur in the answer (whitespace/case-insensitive) and store the cleaned
+    # form. A fabricated or paraphrased model "quote" is never shown as the candidate's own words,
+    # and a real quote the model wrapped in quotes/ellipsis still matches and highlights.
     norm_answer = _norm(answer)
-    evidence = [q for q in evidence if q.strip() and _norm(q) in norm_answer]
+    cleaned = (_clean_phrase(str(e)) for e in evidence)
+    evidence = [c for c in cleaned if c and _norm(c) in norm_answer]
     reasoning = obj.get("reasoning", "")
     reasoning = "" if reasoning is None else str(reasoning)
     return {"score": score, "evidence": evidence, "reasoning": reasoning}
 
 
+def _round_half_up(x: float) -> int:
+    """Round to the nearest integer, rounding a .5 half UP (2.5 -> 3), to match the frontend's
+    Math.round. Python's built-in round() uses banker's rounding (2.5 -> 2), which would disagree
+    with the client on half-integer averages."""
+    return math.floor(x + 0.5)
+
+
+def _dimension_ceiling(score: int) -> int:
+    """A weak *central* dimension caps the whole answer, however strong the rest: score 1 caps
+    the overall at 2, score 2 caps it at 3, otherwise no cap (5)."""
+    if score == 1:
+        return 2
+    if score == 2:
+        return 3
+    return 5
+
+
 def _combine_overall(scores: dict) -> int:
-    """Correctness-ceiling combination (lens_rubric_v1.md 'Combining into an overall score'):
-    correctness 1 caps overall at 2, correctness 2 caps at 3, otherwise overall = rounded
-    average of all four dimensions."""
-    avg = round(sum(scores[d] for d in _RUBRIC_ORDER) / len(_RUBRIC_ORDER))
-    correctness = scores["correctness"]
-    if correctness == 1:
-        overall = min(avg, 2)
-    elif correctness == 2:
-        overall = min(avg, 3)
-    else:
-        overall = avg
-    return max(1, min(5, overall))
+    """Central-dimension ceiling combination (extends lens_rubric_v1.md 'Combining into an overall
+    score'): overall = rounded average of the four dimensions, capped by the tighter of the
+    correctness and completeness ceilings. A well-written answer that doesn't address the question
+    (completeness 1) can no longer score highly, the same way a factually wrong one (correctness 1)
+    can't."""
+    avg = _round_half_up(sum(scores[d] for d in _RUBRIC_ORDER) / len(_RUBRIC_ORDER))
+    cap = min(_dimension_ceiling(scores["correctness"]), _dimension_ceiling(scores["completeness"]))
+    return max(1, min(5, min(avg, cap)))
 
 
 def _build_feedback(overall: int, dims: dict) -> str:
     scores = {d: dims[d]["score"] for d in _RUBRIC_ORDER}
-    avg = round(sum(scores.values()) / len(_RUBRIC_ORDER))
-    correctness = scores["correctness"]
-    cap = 2 if correctness == 1 else 3 if correctness == 2 else None
-    capped = cap is not None and avg > cap
+    avg = _round_half_up(sum(scores.values()) / len(_RUBRIC_ORDER))
+    # Name whichever central dimension(s) actually pulled the overall below the raw average.
+    ceilings = {d: _dimension_ceiling(scores[d]) for d in ("correctness", "completeness")}
+    capping = [d for d, c in ceilings.items() if avg > c]
 
     header = f"Overall score: {overall}/5."
-    if capped:
-        header = f"Overall score: {overall}/5 (capped by correctness {correctness}/5)."
+    if capping:
+        detail = " and ".join(f"{_DISPLAY[d].lower()} {scores[d]}/5" for d in capping)
+        header = f"Overall score: {overall}/5 (capped by {detail})."
     lines = [header, ""]
 
     # lowest-scoring dimension first, so the weakness that drove the score leads;

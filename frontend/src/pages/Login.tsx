@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth'
 import { ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Field'
+import { useSlowNotice } from '@/lib/useSlowNotice'
 
 type Mode = 'login' | 'register'
 
@@ -18,6 +19,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const slow = useSlowNotice(busy)
 
   const from = (loc.state as { from?: string } | null)?.from ?? '/'
 
@@ -68,8 +70,14 @@ export function LoginPage() {
       </aside>
 
       {/* Form column */}
-      <section className="p-8 lg:p-14 flex items-center bg-paper lg:bg-page">
+      <section className="p-8 lg:p-14 flex items-start lg:items-center bg-paper lg:bg-page">
         <form onSubmit={onSubmit} className="w-full max-w-md mx-auto">
+          <Link
+            to="/"
+            className="lg:hidden font-serif text-[1.7rem] leading-none text-ink no-underline block mb-10"
+          >
+            Lens
+          </Link>
           <p className="meta">{isLogin ? 'Sign in' : 'Create account'}</p>
           <h1 className="font-serif font-normal text-[2.4rem] mt-2 mb-9 leading-[1.08]">
             {isLogin ? 'Welcome back.' : 'Start practicing.'}
@@ -113,6 +121,12 @@ export function LoginPage() {
           {error && (
             <p className="mt-6 text-sm text-[oklch(0.5_0.14_25)]" role="alert">
               {error}
+            </p>
+          )}
+
+          {slow && !error && (
+            <p className="mt-6 text-sm text-ink-soft" role="status">
+              Warming up — the first request can take up to a minute on the free tier.
             </p>
           )}
 
