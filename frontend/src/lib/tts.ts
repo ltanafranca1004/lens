@@ -35,8 +35,12 @@ export function setTtsEngine(engine: TtsEngine): void {
 // --- current playback handles, so cancelSpeech() can interrupt either engine ---
 let currentAudio: HTMLAudioElement | null = null
 let currentUrl: string | null = null
+// Bumped on every cancel; a pending async Kokoro generation checks it and bails so a stop (or a new
+// request) during the seconds-long load can't play stale audio afterwards.
+let speechGeneration = 0
 
 export function cancelSpeech(): void {
+  speechGeneration += 1
   try {
     window.speechSynthesis?.cancel()
   } catch {
@@ -146,17 +150,21 @@ function assertAudible(samples: Float32Array): void {
 // always hears something.
 export async function speak(text: string, handlers: SpeakHandlers = {}): Promise<void> {
   cancelSpeech()
+  const generation = speechGeneration
   const trimmed = text.trim()
   if (!trimmed) return
 
   if (getTtsEngine() === 'kokoro') {
     try {
       const tts = await loadKokoro()
+      if (generation !== speechGeneration) return // cancelled during load
       const result = await tts.generate(trimmed, { voice: 'af_heart' })
+      if (generation !== speechGeneration) return // cancelled during generation
       assertAudible(result.audio)
       await playBlob(result.toBlob(), handlers)
       return
     } catch (err) {
+      if (generation !== speechGeneration) return // cancelled — don't fall back to a stale read
       console.error('[tts] Kokoro unavailable; falling back to the browser voice.', err)
       setTtsEngine('browser')
     }

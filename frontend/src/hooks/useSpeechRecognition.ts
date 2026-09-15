@@ -138,8 +138,12 @@ export function useSpeechRecognition(lang = 'en-US'): SpeechRecognitionState {
       recognition.start()
       setListening(true)
     } catch {
-      // start() throws if called while already running — treat as already listening.
-      setListening(true)
+      // A fresh instance is created each call, so a throw here means startup genuinely failed (not
+      // an already-running session). Don't switch to the voice UI — keep the typing fallback.
+      wantListeningRef.current = false
+      recognitionRef.current = null
+      setListening(false)
+      setError("Voice input couldn't start. Type your answer instead.")
     }
   }, [lang, clearPauseTimer])
 

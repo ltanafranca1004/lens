@@ -66,6 +66,11 @@ export function VoiceAnswer({ transcript, onStop }: { transcript: string; onStop
         }
         loop()
       } catch {
+        // Don't start (or leak) anything if we were torn down while getUserMedia was pending, and
+        // release any partially-acquired resources before falling back to the animated placeholder.
+        if (cancelled) return
+        stream?.getTracks().forEach((track) => track.stop())
+        audioCtx?.close().catch(() => {})
         runPlaceholder()
       }
     }

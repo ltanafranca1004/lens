@@ -26,7 +26,11 @@ export function QuestionAudioButton({ text }: { text: string }) {
     speak(text, {
       onStart: () => setStatus('playing'),
       onEnd: () => setStatus('idle'),
-    }).catch(() => setStatus('idle'))
+    })
+      .catch(() => setStatus('idle'))
+      // speak() may have fallen back from Kokoro to the browser voice; re-sync the toggle so its
+      // displayed engine matches the persisted preference (no need to toggle twice).
+      .finally(() => setEngine(getTtsEngine()))
   }
 
   const flipEngine = () => {
@@ -42,7 +46,7 @@ export function QuestionAudioButton({ text }: { text: string }) {
       <button
         type="button"
         onClick={toggle}
-        aria-label={status === 'playing' ? 'Stop reading the question' : 'Read the question aloud'}
+        aria-label={status !== 'idle' ? 'Stop reading the question' : 'Read the question aloud'}
         title={
           status === 'loading' && engine === 'kokoro'
             ? 'Preparing the natural voice (one-time download)…'

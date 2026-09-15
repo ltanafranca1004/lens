@@ -42,8 +42,14 @@ export class TranscriptBuilder {
   // interim append without a period (still being spoken). Within a sentence, phrases stay contiguous.
   get text(): string {
     const completed = this.sentences.map((s) => s.trim()).filter(Boolean)
-    let out = completed.join('. ')
-    if (out) out += '.'
+    // Join sentences with ". ", but preserve any terminal punctuation a recognizer already added
+    // (some engines emit "?"/"!") instead of producing a doubled "Why?.".
+    let out = ''
+    for (const sentence of completed) {
+      if (out) out += /[.!?…]$/u.test(out) ? ' ' : '. '
+      out += sentence
+    }
+    if (out && !/[.!?…]$/u.test(out)) out += '.'
     const active = [this.current.join(' ').trim(), this.interim.trim()].filter(Boolean).join(' ').trim()
     if (active) out += (out ? ' ' : '') + active
     return out

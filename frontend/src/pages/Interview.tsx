@@ -68,6 +68,7 @@ function AnswerForm({
   const [localError, setLocalError] = useState<string | null>(null)
   const speech = useSpeechRecognition()
   const baseRef = useRef('') // text already in the field when a recording began
+  const voiceActiveRef = useRef(false) // true from voice start until the final transcript is applied
   const wasListening = useRef(false) // detects the stop transition, to snapshot delivery once
 
   const persistDraft = useCallback(
@@ -89,18 +90,22 @@ function AnswerForm({
 
   const startVoice = () => {
     baseRef.current = answer
+    voiceActiveRef.current = true
     speech.start()
   }
 
   // Live-append the recognized transcript to whatever was in the field when recording began, so
   // dictation adds to (never wipes) typed text and the textarea stays the single source of truth.
+  // Keyed on voiceActiveRef (not `listening`) so the final flushed transcript — emitted in onend
+  // after listening flips false — is still captured; then we stop syncing so the user can edit.
   useEffect(() => {
-    if (!speech.listening) return
+    if (!voiceActiveRef.current) return
     const base = baseRef.current
     const sep = base.trim() && !/\s$/.test(base) ? ' ' : ''
     const next = base + sep + speech.transcript
     setAnswer(next)
     persistDraft(next)
+    if (!speech.listening) voiceActiveRef.current = false
   }, [speech.transcript, speech.listening, persistDraft])
 
   // On the stop transition, snapshot delivery metrics (pace + fillers) for the separate, unscored
