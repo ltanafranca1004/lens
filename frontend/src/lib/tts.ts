@@ -136,6 +136,11 @@ function getWorker(): Worker {
     worker.onerror = (e) => {
       const err = new Error(`TTS worker error: ${e.message || 'unknown'}`)
       console.error('[tts]', err.message)
+      // Discard the dead worker so the next ensureKokoroLoaded() spawns a fresh one — otherwise a
+      // later call would post to a worker that can't respond and its waiter would hang forever.
+      const failedWorker = worker
+      worker = null
+      failedWorker?.terminate()
       loadState = 'idle'
       loadWaiters.forEach((w) => w.reject(err))
       loadWaiters = []
