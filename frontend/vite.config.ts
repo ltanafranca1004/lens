@@ -15,6 +15,14 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@huggingface/transformers', 'kokoro-js', 'onnxruntime-web'],
   },
+  // The TTS worker (tts.worker.ts) imports kokoro-js as an ES module; the default 'iife' worker
+  // format can't do ESM imports. esnext lets top-level constructs through the build.
+  worker: {
+    format: 'es',
+  },
+  build: {
+    target: 'esnext',
+  },
   server: {
     port: 5173,
     proxy: {

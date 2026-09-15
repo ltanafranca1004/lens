@@ -1,13 +1,25 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Volume2, VolumeX } from 'lucide-react'
-import { cancelSpeech, getTtsEngine, isTtsAvailable, setTtsEngine, speak, type TtsEngine } from '@/lib/tts'
+import { Loader2, Play, Square } from 'lucide-react'
+import {
+  cancelSpeech,
+  ensureKokoroLoaded,
+  getTtsEngine,
+  isTtsAvailable,
+  setTtsEngine,
+  speak,
+  type TtsEngine,
+  type TtsProgress,
+} from '@/lib/tts'
 
-// The "read the question aloud" control beside the question. Plays via the browser's built-in speech
-// synthesis by default (zero cost, works everywhere); the small "natural" toggle opts into the
-// higher-quality on-device Kokoro voice (one-time ~110 MB download), which falls back transparently.
+// Two clearly-labeled controls beside the question:
+//   - "Read aloud" / "Stop" — a labeled play/stop button (with a download % while the natural voice
+//     loads), so it never reads as a mute icon.
+//   - "Natural voice" — a labeled on/off toggle for the higher-quality on-device voice (Kokoro). All
+//     Kokoro work runs in a Web Worker (see tts.ts), so downloading/synthesizing never freezes the tab.
 export function QuestionAudioButton({ text }: { text: string }) {
   const [status, setStatus] = useState<'idle' | 'loading' | 'playing'>('idle')
   const [engine, setEngine] = useState<TtsEngine>(() => getTtsEngine())
+  const [pct, setPct] = useState<number | null>(null) // model download progress (0-100)
 
   // Stop any in-flight playback when the question changes or the control unmounts.
   useEffect(() => {
@@ -16,56 +28,97 @@ export function QuestionAudioButton({ text }: { text: string }) {
 
   if (!isTtsAvailable()) return null
 
-  const toggle = () => {
+  const onProgress = (p: TtsProgress) => {
+    if (typeof p.progress === 'number') setPct(Math.round(p.progress))
+  }
+
+  const play = () => {
+    console.log('[QuestionAudioButton] click, status=', status)
     if (status !== 'idle') {
       cancelSpeech()
       setStatus('idle')
+      setPct(null)
       return
     }
     setStatus('loading')
-    speak(text, {
-      onStart: () => setStatus('playing'),
-      onEnd: () => setStatus('idle'),
-    })
-      .catch(() => setStatus('idle'))
-      // speak() may have fallen back from Kokoro to the browser voice; re-sync the toggle so its
-      // displayed engine matches the persisted preference (no need to toggle twice).
+    speak(
+      text,
+      {
+        onStart: () => {
+          setStatus('playing')
+          setPct(null)
+        },
+        onEnd: () => {
+          setStatus('idle')
+          setPct(null)
+        },
+      },
+      { onProgress },
+    )
+      .catch(() => {
+        setStatus('idle')
+        setPct(null)
+      })
+      // speak() may have fallen back Kokoro→browser; re-sync the toggle's displayed engine.
       .finally(() => setEngine(getTtsEngine()))
   }
 
-  const flipEngine = () => {
+  const toggleNatural = () => {
     const next: TtsEngine = engine === 'kokoro' ? 'browser' : 'kokoro'
     setTtsEngine(next)
     setEngine(next)
+    if (next === 'kokoro') {
+      // Opt-in prefetch: start the one-time download now (with progress) so it overlaps reading.
+      setPct(0)
+      ensureKokoroLoaded(onProgress)
+        .then(() => setPct(null))
+        .catch(() => setPct(null))
+    } else {
+      setPct(null)
+    }
   }
 
-  const Icon = status === 'loading' ? Loader2 : status === 'playing' ? VolumeX : Volume2
+  const label =
+    status === 'loading'
+      ? engine === 'kokoro' && pct !== null
+        ? `Preparing ${pct}%`
+        : 'Preparing…'
+      : status === 'playing'
+        ? 'Stop'
+        : 'Read aloud'
+  const Icon = status === 'loading' ? Loader2 : status === 'playing' ? Square : Play
+
+  // Show download progress next to the toggle while prefetching (i.e. not mid-play).
+  const downloading = engine === 'kokoro' && status !== 'loading' && pct !== null
 
   return (
-    <div className="flex flex-col items-center gap-1 shrink-0">
+    <div className="flex items-center gap-4 shrink-0">
       <button
         type="button"
-        onClick={toggle}
+        onClick={play}
         aria-label={status !== 'idle' ? 'Stop reading the question' : 'Read the question aloud'}
-        title={
-          status === 'loading' && engine === 'kokoro'
-            ? 'Preparing the natural voice (one-time download)…'
-            : 'Read the question aloud'
-        }
-        className="inline-flex h-9 w-9 items-center justify-center rounded-full text-ink/50 hover:text-ink hover:bg-panel cursor-pointer"
+        className="inline-flex items-center gap-1.5 rounded-xs border border-line px-3 py-1.5 text-[13px] text-ink/75 hover:text-ink hover:bg-panel cursor-pointer"
       >
-        <Icon size={17} strokeWidth={1.75} className={status === 'loading' ? 'animate-spin' : ''} />
+        <Icon size={14} strokeWidth={1.9} className={status === 'loading' ? 'animate-spin' : ''} />
+        {label}
       </button>
+
       <button
         type="button"
-        onClick={flipEngine}
+        onClick={toggleNatural}
         aria-pressed={engine === 'kokoro'}
-        title="Higher-quality on-device voice. First use downloads ~110 MB once, then works offline."
-        className={`text-[10.5px] leading-none cursor-pointer ${
-          engine === 'kokoro' ? 'text-link' : 'text-ink/40 hover:text-ink/70'
+        title="Natural voice: higher quality, runs on your device. First use downloads ~100 MB once, then works offline."
+        className={`inline-flex items-center gap-1.5 text-[12px] cursor-pointer ${
+          engine === 'kokoro' ? 'text-link' : 'text-ink/45 hover:text-ink/70'
         }`}
       >
-        natural
+        <span
+          aria-hidden
+          className={`inline-block h-3 w-3 rounded-full border ${
+            engine === 'kokoro' ? 'bg-link border-link' : 'border-ink/40'
+          }`}
+        />
+        Natural voice{downloading ? ` · downloading ${pct}%` : ''}
       </button>
     </div>
   )

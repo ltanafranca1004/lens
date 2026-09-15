@@ -1,14 +1,16 @@
 // Text-to-speech for reading questions aloud. Two engines, both zero ongoing cost and fully
 // client-side:
 //   - browser `speechSynthesis` (default): instant, no download, works in every browser.
-//   - Kokoro-82M via kokoro-js (opt-in "natural voice"): higher quality, runs in the browser via
-//     WASM (ONNX Runtime Web). The ~110 MB model weights download once and are cached
-//     (Cache API/IndexedDB); the ORT runtime wasm is fetched from the jsDelivr CDN on first use.
-//     Falls back to speechSynthesis on any failure.
+//   - Kokoro-82M "natural voice" (opt-in): higher quality, runs entirely in a dedicated Web Worker
+//     (see tts.worker.ts) so the ~110 MB one-time download + WASM inference never block/freeze the UI.
+//     Model weights are cached (Cache API/IndexedDB); the ORT runtime wasm is fetched from jsDelivr on
+//     first use. Falls back to speechSynthesis on any failure.
 // No backend and no API key. The only network use is Kokoro's one-time weight + runtime download.
 
 export type SpeakHandlers = { onStart?: () => void; onEnd?: () => void }
 export type TtsEngine = 'browser' | 'kokoro'
+export type TtsProgress = { file?: string; loaded?: number; total?: number; progress?: number }
+export type SpeakOptions = { onProgress?: (p: TtsProgress) => void }
 
 const ENGINE_KEY = 'lens.tts.engine'
 
@@ -32,15 +34,15 @@ export function setTtsEngine(engine: TtsEngine): void {
   }
 }
 
-// --- current playback handles, so cancelSpeech() can interrupt either engine ---
+// --- current playback + cancellation state ---
 let currentAudio: HTMLAudioElement | null = null
 let currentUrl: string | null = null
-// Bumped on every cancel; a pending async Kokoro generation checks it and bails so a stop (or a new
-// request) during the seconds-long load can't play stale audio afterwards.
-let speechGeneration = 0
+// Bumped on every cancel; speak() captures it and discards any worker result that arrives after a
+// stop / newer request (the worker still finishes, but its audio is never played).
+let activeRequest = 0
 
 export function cancelSpeech(): void {
-  speechGeneration += 1
+  activeRequest += 1
   try {
     window.speechSynthesis?.cancel()
   } catch {
@@ -80,41 +82,125 @@ function speakBrowser(text: string, handlers: SpeakHandlers): Promise<void> {
   })
 }
 
-// Kokoro is loaded lazily and cached for the tab's lifetime; transformers.js caches the weights in
-// the browser (Cache API / IndexedDB), so the ~110 MB download is one-time per device.
-type KokoroInstance = InstanceType<(typeof import('kokoro-js'))['KokoroTTS']>
-let kokoroPromise: Promise<KokoroInstance> | null = null
+// --- Kokoro Web Worker client ---
+export type SynthResult = { wav: ArrayBuffer; peak: number; sampleRate: number }
 
-function loadKokoro(): Promise<KokoroInstance> {
-  if (!kokoroPromise) {
-    kokoroPromise = (async () => {
-      const { KokoroTTS } = await import('kokoro-js')
-      // WASM + q8 on every browser: reliable and ~90-110 MB (cached after first load). We deliberately
-      // do NOT use WebGPU — dtype 'q8' on the ORT WebGPU/JSEP backend returns silent/NaN audio without
-      // throwing (transformers.js #1512/#1320, onnxruntime #32578); a correct WebGPU path would need
-      // dtype 'fp32' (~326 MB). WASM q8 trades a few seconds of CPU synth time for correctness.
-      return KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
-        dtype: 'q8',
-        device: 'wasm',
-      })
-    })().catch((err) => {
-      kokoroPromise = null // allow a retry on a later attempt
-      throw err
-    })
+type WorkerOut =
+  | { status: 'progress'; file?: string; loaded?: number; total?: number; progress?: number }
+  | { status: 'ready' }
+  | { status: 'complete'; id: number; wav: ArrayBuffer; peak: number; sampleRate: number }
+  | { status: 'error'; id?: number; message: string }
+
+let worker: Worker | null = null
+let loadState: 'idle' | 'loading' | 'ready' = 'idle'
+let loadWaiters: { resolve: () => void; reject: (e: Error) => void }[] = []
+const loadProgressCbs = new Set<(p: TtsProgress) => void>()
+const generateWaiters = new Map<number, { resolve: (r: SynthResult) => void; reject: (e: Error) => void }>()
+let nextGenerateId = 1
+
+function getWorker(): Worker {
+  if (!worker) {
+    console.log('[tts] creating Kokoro worker')
+    // URL literal must be inline for Vite's worker bundling; { type: 'module' } for ESM imports.
+    worker = new Worker(new URL('./tts.worker.ts', import.meta.url), { type: 'module' })
+    worker.onmessage = (e: MessageEvent<WorkerOut>) => {
+      const m = e.data
+      if (m.status === 'progress') {
+        loadProgressCbs.forEach((cb) => cb(m))
+      } else if (m.status === 'ready') {
+        console.log('[tts] worker ready')
+        loadState = 'ready'
+        loadWaiters.forEach((w) => w.resolve())
+        loadWaiters = []
+      } else if (m.status === 'complete') {
+        const waiter = generateWaiters.get(m.id)
+        if (waiter) {
+          generateWaiters.delete(m.id)
+          waiter.resolve({ wav: m.wav, peak: m.peak, sampleRate: m.sampleRate })
+        }
+      } else if (m.status === 'error') {
+        const err = new Error(m.message)
+        if (typeof m.id === 'number') {
+          const waiter = generateWaiters.get(m.id)
+          if (waiter) {
+            generateWaiters.delete(m.id)
+            waiter.reject(err)
+          }
+        } else {
+          loadState = 'idle'
+          loadWaiters.forEach((w) => w.reject(err))
+          loadWaiters = []
+        }
+      }
+    }
+    worker.onerror = (e) => {
+      const err = new Error(`TTS worker error: ${e.message || 'unknown'}`)
+      console.error('[tts]', err.message)
+      loadState = 'idle'
+      loadWaiters.forEach((w) => w.reject(err))
+      loadWaiters = []
+      generateWaiters.forEach((w) => w.reject(err))
+      generateWaiters.clear()
+    }
   }
-  return kokoroPromise
+  return worker
 }
 
-function playBlob(blob: Blob, handlers: SpeakHandlers): Promise<void> {
+// Kick off (or await) the one-time model load. Safe to call repeatedly — the worker caches the model.
+export function ensureKokoroLoaded(onProgress?: (p: TtsProgress) => void): Promise<void> {
+  const w = getWorker()
+  if (loadState === 'ready') return Promise.resolve()
+  if (onProgress) loadProgressCbs.add(onProgress)
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      if (onProgress) loadProgressCbs.delete(onProgress)
+    }
+    loadWaiters.push({
+      resolve: () => {
+        cleanup()
+        resolve()
+      },
+      reject: (e) => {
+        cleanup()
+        reject(e)
+      },
+    })
+    if (loadState === 'idle') {
+      loadState = 'loading'
+      console.log('[tts] posting load')
+      w.postMessage({ type: 'load' })
+    }
+  })
+}
+
+// Synthesize `text` in the worker; resolves with the WAV bytes + peak amplitude. Testable seam.
+export function synthesizeKokoro(text: string, opts: SpeakOptions = {}): Promise<SynthResult> {
+  const w = getWorker()
+  const id = nextGenerateId++
+  return ensureKokoroLoaded(opts.onProgress).then(
+    () =>
+      new Promise<SynthResult>((resolve, reject) => {
+        generateWaiters.set(id, { resolve, reject })
+        console.log('[tts] posting generate', id)
+        w.postMessage({ type: 'generate', id, text })
+      }),
+  )
+}
+
+function assertAudible(peak: number): void {
+  if (!Number.isFinite(peak) || peak < 1e-4) {
+    throw new Error(`Kokoro produced silent audio (peak=${peak}).`)
+  }
+}
+
+function playWav(wav: ArrayBuffer, handlers: SpeakHandlers): Promise<void> {
   return new Promise((resolve) => {
-    const url = URL.createObjectURL(blob)
+    const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }))
     const audio = new Audio(url)
     currentAudio = audio
     currentUrl = url
-    // Playback errors are logged but non-fatal: we always resolve so a user Stop (cancelSpeech clears
-    // the src) or a benign decode hiccup never triggers a second, doubled read via the browser voice.
     const finish = (err?: unknown) => {
-      if (err) console.error('[tts] Kokoro audio playback error.', err)
+      if (err) console.error('[tts] playback error', err)
       handlers.onEnd?.()
       if (currentUrl === url) {
         URL.revokeObjectURL(url)
@@ -123,51 +209,45 @@ function playBlob(blob: Blob, handlers: SpeakHandlers): Promise<void> {
       if (currentAudio === audio) currentAudio = null
       resolve()
     }
-    audio.onplay = () => handlers.onStart?.()
-    audio.onended = () => finish()
+    audio.onplay = () => {
+      console.log('[tts] playback start')
+      handlers.onStart?.()
+    }
+    audio.onended = () => {
+      console.log('[tts] playback end')
+      finish()
+    }
     audio.onerror = () => finish('audio element error')
     audio.play().catch((err) => finish(err))
   })
 }
 
-// Guard against a valid-WAV-but-silent waveform (the class of bug a wrong dtype/device combo produced:
-// NaN/zero samples wrapped in a correct header). Throwing here lets speak()'s fallback engage and
-// speak with the browser voice instead of "playing" silence with no error.
-function assertAudible(samples: Float32Array): void {
-  let peak = 0
-  for (let i = 0; i < samples.length; i++) {
-    const v = Math.abs(samples[i])
-    if (v > peak) peak = v
-  }
-  if (!samples.length || !Number.isFinite(peak) || peak < 1e-4) {
-    throw new Error(`Kokoro produced silent audio (samples=${samples.length}, peak=${peak}).`)
-  }
-}
-
-// Speak `text` with the preferred engine. When "natural voice" is selected but Kokoro can't run or
-// returns unusable audio (load/download failure, decode error, silent output), log it, revert the
-// preference to the browser voice for the rest of the session, and speak with it now — so the user
-// always hears something.
-export async function speak(text: string, handlers: SpeakHandlers = {}): Promise<void> {
+// Speak `text` with the preferred engine. Kokoro runs in the worker (never blocks the UI); on any
+// failure or silent output, log, revert to the browser voice for the session, and speak with it now.
+export async function speak(text: string, handlers: SpeakHandlers = {}, opts: SpeakOptions = {}): Promise<void> {
   cancelSpeech()
-  const generation = speechGeneration
+  const req = activeRequest
   const trimmed = text.trim()
   if (!trimmed) return
+  console.log('[tts] speak', { engine: getTtsEngine(), chars: trimmed.length })
 
   if (getTtsEngine() === 'kokoro') {
     try {
-      const tts = await loadKokoro()
-      if (generation !== speechGeneration) return // cancelled during load
-      const result = await tts.generate(trimmed, { voice: 'af_heart' })
-      if (generation !== speechGeneration) return // cancelled during generation
-      assertAudible(result.audio)
-      await playBlob(result.toBlob(), handlers)
+      const { wav, peak } = await synthesizeKokoro(trimmed, opts)
+      if (req !== activeRequest) {
+        console.log('[tts] discarding stale Kokoro result')
+        return
+      }
+      assertAudible(peak)
+      await playWav(wav, handlers)
       return
     } catch (err) {
-      if (generation !== speechGeneration) return // cancelled — don't fall back to a stale read
+      if (req !== activeRequest) return // cancelled — don't fall back to a stale read
       console.error('[tts] Kokoro unavailable; falling back to the browser voice.', err)
       setTtsEngine('browser')
     }
   }
+
+  if (req !== activeRequest) return
   await speakBrowser(trimmed, handlers)
 }
