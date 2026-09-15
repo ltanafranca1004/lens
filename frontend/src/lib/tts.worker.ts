@@ -2,7 +2,13 @@
 // model download, the espeak-ng phonemizer, tokenization, and ONNX (WASM) inference. transformers.js
 // forces ONNX's WASM backend onto the calling thread (proxy=false), and kokoro-js runs the phonemizer
 // + tokenizer synchronously too — so doing this on the main thread freezes the tab. Here it can't.
-import { KokoroTTS } from 'kokoro-js'
+import { KokoroTTS, env } from 'kokoro-js'
+
+// Self-host the ONNX Runtime Web wasm from our own origin instead of the jsDelivr CDN (transformers.js
+// sets the CDN default at import time, so override it here, before any load). vite-plugin-static-copy
+// serves ort-wasm-simd-threaded.jsep.{wasm,mjs} at /ort/ — both are required (once wasmPaths is set,
+// ORT fetches the external .mjs glue too). Model weights still come from the Hugging Face CDN.
+env.wasmPaths = '/ort/'
 
 const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX'
 
