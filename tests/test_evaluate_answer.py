@@ -89,16 +89,19 @@ class EvaluateAnswerWiring(unittest.TestCase):
 
 class CleanPhraseAndEvidence(unittest.TestCase):
     def test_clean_phrase_strips_quotes_and_ellipsis(self):
-        self.assertEqual(L._clean_phrase('"…I mint a JWT…"'), "I mint a JWT")
+        self.assertEqual(L._clean_phrase('"…I mint a JWT…"'), "I mint a JWT")  # quotes outside ellipsis
+        self.assertEqual(L._clean_phrase('… "I mint a JWT" …'), "I mint a JWT")  # ellipsis outside quotes
         self.assertEqual(L._clean_phrase("‘I mint a JWT’"), "I mint a JWT")
         self.assertEqual(L._clean_phrase("...leading dots"), "leading dots")
         self.assertEqual(L._clean_phrase("plain phrase"), "plain phrase")
 
     def test_wrapped_evidence_survives_and_is_stored_clean(self):
-        # NEW-2: a real quote the model wrapped in quotes/ellipsis still matches and is stored clean.
+        # NEW-2: a real quote the model wrapped in quotes/ellipsis still matches and is stored clean,
+        # regardless of which wrapper is on the outside.
         answer = "On success I mint a JWT with the user id in the sub claim."
-        parsed = L._parse_dim({"score": 4, "evidence": ['"…I mint a JWT…"'], "reasoning": "ok"}, "reasoning", answer)
-        self.assertEqual(parsed["evidence"], ["I mint a JWT"])
+        for quote in ('"…I mint a JWT…"', '… "I mint a JWT" …'):
+            parsed = L._parse_dim({"score": 4, "evidence": [quote], "reasoning": "ok"}, "reasoning", answer)
+            self.assertEqual(parsed["evidence"], ["I mint a JWT"], quote)
 
     def test_fabricated_quote_is_still_dropped(self):
         answer = "On success I mint a JWT."

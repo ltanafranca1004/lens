@@ -30,12 +30,16 @@ export type Segment = { text: string; mark?: boolean; bg?: string }
 // Strip surrounding quotes (straight or curly) and a trailing ellipsis (the mock evaluator appends
 // one to its snippet). The real evaluator's quotes are already verified substrings of the answer.
 function cleanPhrase(p: string): string {
-  return p
-    .replace(/^["'“‘\s]+/, '')
-    .replace(/["'”’\s]+$/, '')
-    .replace(/^(?:…|\.\.\.)\s*/, '')
-    .replace(/\s*(?:…|\.\.\.)$/, '')
-    .trim()
+  let prev = ''
+  while (prev !== p) {
+    prev = p
+    p = p
+      .replace(/^["'“‘\s]+/, '')
+      .replace(/["'”’\s]+$/, '')
+      .replace(/^(?:…|\.\.\.)\s*/, '')
+      .replace(/\s*(?:…|\.\.\.)$/, '')
+  }
+  return p.trim()
 }
 
 const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()

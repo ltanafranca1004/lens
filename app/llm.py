@@ -227,13 +227,18 @@ def _norm(s) -> str:
 
 
 def _clean_phrase(p: str) -> str:
-    """Strip surrounding quotes (straight or curly) and a leading/trailing ellipsis that a model
+    """Strip surrounding quotes (straight or curly) and leading/trailing ellipsis that a model
     sometimes wraps around a quote, so the phrase still matches -- and is stored as -- the
-    candidate's own words. Mirrors the frontend cleanPhrase in frontend/src/lib/rubric.ts."""
-    p = re.sub(r"^[\"'“‘\s]+", "", p)
-    p = re.sub(r"[\"'”’\s]+$", "", p)
-    p = re.sub(r"^(?:…|\.\.\.)\s*", "", p)
-    p = re.sub(r"\s*(?:…|\.\.\.)$", "", p)
+    candidate's own words. Repeats until neither wrapper remains, so nesting order (a quote inside
+    ellipsis, or ellipsis inside a quote) doesn't matter. Mirrors the frontend cleanPhrase in
+    frontend/src/lib/rubric.ts."""
+    prev = None
+    while prev != p:
+        prev = p
+        p = re.sub(r"^[\"'“‘\s]+", "", p)
+        p = re.sub(r"[\"'”’\s]+$", "", p)
+        p = re.sub(r"^(?:…|\.\.\.)\s*", "", p)
+        p = re.sub(r"\s*(?:…|\.\.\.)$", "", p)
     return p.strip()
 
 
