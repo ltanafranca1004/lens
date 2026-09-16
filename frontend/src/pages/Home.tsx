@@ -9,6 +9,10 @@ import { roleLabel } from '@/lib/rubric'
 import { useSlowNotice } from '@/lib/useSlowNotice'
 import type { Question, SessionSummary } from '@/lib/types'
 
+// Kept in sync with the backend guards in app/resume.py (extensions + MAX_UPLOAD_BYTES).
+const RESUME_EXTENSIONS = ['.pdf', '.docx']
+const MAX_RESUME_BYTES = 5 * 1024 * 1024
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
 }
@@ -17,6 +21,7 @@ export function HomePage() {
   const nav = useNavigate()
   const qc = useQueryClient()
   const [posting, setPosting] = useState('')
+  const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const sessionsQuery = useQuery({
@@ -26,11 +31,21 @@ export function HomePage() {
   const recent = sessionsQuery.data?.slice(0, 4) ?? []
 
   const startMutation = useMutation({
-    mutationFn: async (jobPosting: string) => {
+    mutationFn: async ({ jobPosting, resume }: { jobPosting: string; resume: File | null }) => {
       const session = await api<SessionSummary>('/sessions', {
         method: 'POST',
         body: { job_posting: jobPosting },
       })
+      // Upload the resume (if any) BEFORE generating — the backend snapshots resume_text at
+      // generation time and 409s a resume uploaded after questions exist.
+      if (resume) {
+        const form = new FormData()
+        form.append('file', resume)
+        await api<{ filename: string; resume_chars: number }>(
+          `/sessions/${session.id}/resume`,
+          { method: 'POST', body: form },
+        )
+      }
       await api<Question[]>(`/sessions/${session.id}/questions`, { method: 'POST' })
       return session
     },
@@ -50,7 +65,18 @@ export function HomePage() {
       setError('Paste a real job posting — at least 20 characters.')
       return
     }
-    startMutation.mutate(posting)
+    if (resumeFile) {
+      const lower = resumeFile.name.toLowerCase()
+      if (!RESUME_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
+        setError('Resume must be a PDF or .docx file.')
+        return
+      }
+      if (resumeFile.size > MAX_RESUME_BYTES) {
+        setError('Resume file is too large (max 5 MB).')
+        return
+      }
+    }
+    startMutation.mutate({ jobPosting: posting, resume: resumeFile })
   }
 
   return (
@@ -75,6 +101,22 @@ export function HomePage() {
           onChange={(e) => setPosting(e.target.value)}
           error={error ?? undefined}
         />
+        <div className="mt-4">
+          <label htmlFor="resume" className="meta block mb-1.5">
+            Resume{' '}
+            <span className="text-ink-soft">
+              (optional — personalizes two of the five questions)
+            </span>
+          </label>
+          <input
+            id="resume"
+            type="file"
+            accept=".pdf,.docx"
+            onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)}
+            className="block w-full text-[14px] text-ink-soft file:mr-3 file:rounded-md file:border file:border-line file:bg-panel file:px-3 file:py-1.5 file:text-ink hover:file:bg-panel/70 file:cursor-pointer"
+          />
+          {resumeFile && <p className="meta mt-1.5">Attached: {resumeFile.name}</p>}
+        </div>
         <div className="flex items-center justify-between gap-4 mt-5">
           <span className="meta hidden sm:inline">
             Five questions · no timer · leave any one unanswered

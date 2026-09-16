@@ -74,3 +74,10 @@ class SessionOut(BaseModel):
 class SessionDetail(SessionOut):
     questions: list[QuestionOut]
     average_score: float | None
+
+
+class ResumeUploadResult(BaseModel):
+    """Confirmation returned after a resume is parsed and stored on the session."""
+
+    filename: str
+    resume_chars: int

@@ -23,6 +23,10 @@ class Session(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     job_posting = Column(Text, nullable=False)
+    # Optional resume text parsed from an uploaded PDF/DOCX (see app/resume.py). When present,
+    # question generation blends it with the job posting. NULL when the user started from a
+    # posting alone. Snapshotted here so Phase 2 can verify answers against the same resume.
+    resume_text = Column(Text, nullable=True)
     status = Column(String, default="in_progress")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime(timezone=True), nullable=True)
