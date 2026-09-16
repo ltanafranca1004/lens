@@ -35,7 +35,9 @@ export function QuestionAudioButton({ text }: { text: string }) {
   // default/browser-voice users. ensureKokoroLoaded is idempotent + deduped, so remounting per
   // question is harmless; we don't pre-set pct here, so an already-loaded model shows no indicator.
   useEffect(() => {
-    if (getTtsEngine() !== 'kokoro') return
+    // Opt-in only, and only when the control is actually usable (isTtsAvailable) — otherwise the
+    // component renders null and we'd start the ~110 MB load behind a control the user can't see.
+    if (getTtsEngine() !== 'kokoro' || !isTtsAvailable()) return
     ensureKokoroLoaded(onProgress)
       .then(() => setPct(null))
       .catch(() => setPct(null))
