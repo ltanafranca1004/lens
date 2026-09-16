@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Loader2, Play, Square } from 'lucide-react'
 import {
   cancelSpeech,
@@ -26,11 +26,24 @@ export function QuestionAudioButton({ text }: { text: string }) {
     return () => cancelSpeech()
   }, [text])
 
-  if (!isTtsAvailable()) return null
-
-  const onProgress = (p: TtsProgress) => {
+  const onProgress = useCallback((p: TtsProgress) => {
     if (typeof p.progress === 'number') setPct(Math.round(p.progress))
-  }
+  }, [])
+
+  // Returning opted-in users: if Natural voice was enabled in a prior session, start the one-time
+  // download on mount so it's ready (or partway) before "Read aloud". Opt-in only — never fires for
+  // default/browser-voice users. ensureKokoroLoaded is idempotent + deduped, so remounting per
+  // question is harmless; we don't pre-set pct here, so an already-loaded model shows no indicator.
+  useEffect(() => {
+    // Opt-in only, and only when the control is actually usable (isTtsAvailable) — otherwise the
+    // component renders null and we'd start the ~110 MB load behind a control the user can't see.
+    if (getTtsEngine() !== 'kokoro' || !isTtsAvailable()) return
+    ensureKokoroLoaded(onProgress)
+      .then(() => setPct(null))
+      .catch(() => setPct(null))
+  }, [onProgress])
+
+  if (!isTtsAvailable()) return null
 
   const play = () => {
     console.log('[QuestionAudioButton] click, status=', status)
