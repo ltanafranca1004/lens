@@ -1,13 +1,21 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session as DbSession
 
 from app.auth import get_current_user
 from app.database import get_db
 from app.llm import evaluate_answer, generate_questions
 from app.models import Question, Session, User
-from app.schemas import AnswerSubmit, QuestionOut, SessionCreate, SessionDetail, SessionOut
+from app.resume import MAX_UPLOAD_BYTES, ResumeParseError, extract_resume_text
+from app.schemas import (
+    AnswerSubmit,
+    QuestionOut,
+    ResumeUploadResult,
+    SessionCreate,
+    SessionDetail,
+    SessionOut,
+)
 from app.study import build_study_note
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -87,6 +95,49 @@ def get_session(
     )
 
 
+@router.post("/{session_id}/resume", response_model=ResumeUploadResult)
+async def upload_resume(
+    session_id: int,
+    file: UploadFile = File(...),
+    db: DbSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ResumeUploadResult:
+    session = _get_owned_session(session_id, current_user, db)
+
+    # The resume must be attached before questions are generated: generation snapshots
+    # session.resume_text, so a late upload could never influence the questions.
+    existing = db.query(Question).filter(Question.session_id == session.id).first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Questions have already been generated; upload the resume before generating.",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty.",
+        )
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Resume file is too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB).",
+        )
+
+    try:
+        resume_text = extract_resume_text(file.filename or "", data)
+    except ResumeParseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    session.resume_text = resume_text
+    db.commit()
+    return ResumeUploadResult(filename=file.filename or "", resume_chars=len(resume_text))
+
+
 @router.post(
     "/{session_id}/questions",
     response_model=list[QuestionOut],
@@ -106,7 +157,7 @@ def create_questions(
             detail="Questions have already been generated for this session",
         )
 
-    question_texts = generate_questions(session.job_posting)
+    question_texts = generate_questions(session.job_posting, session.resume_text)
     questions = [
         Question(session_id=session.id, question_text=text, order_index=i)
         for i, text in enumerate(question_texts)

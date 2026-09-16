@@ -54,7 +54,11 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   let body: BodyInit | undefined
-  if (rest.body !== undefined) {
+  if (rest.body instanceof FormData) {
+    // Multipart upload (e.g. a resume file): pass the FormData through untouched and let the
+    // browser set Content-Type with the correct multipart boundary. Never JSON-stringify it.
+    body = rest.body
+  } else if (rest.body !== undefined) {
     headers.set('Content-Type', 'application/json')
     body = JSON.stringify(rest.body)
   }
