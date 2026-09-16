@@ -5,6 +5,7 @@ pypdf, .docx via python-docx. Text only -- the uploaded file itself is never sto
 seam so Phase 2 (verifying an answer's claims against the resume) can read the same stored text.
 """
 import io
+import zipfile
 
 from docx import Document
 from pypdf import PdfReader
@@ -13,6 +14,10 @@ from pypdf import PdfReader
 # schemas.SessionCreate so both question-generation inputs are bounded the same way.
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_RESUME_CHARS = 20_000
+# A DOCX is a ZIP; a small upload can declare a huge uncompressed payload (a decompression bomb).
+# A real resume expands to well under this, so cap the total declared uncompressed size and reject
+# before python-docx decompresses any member. Generous enough for resumes with embedded images.
+MAX_DECOMPRESSED_BYTES = 50 * 1024 * 1024  # 50 MB
 
 _PDF_EXT = ".pdf"
 _DOCX_EXT = ".docx"
@@ -42,6 +47,17 @@ def _extract_pdf(data: bytes) -> str:
 
 
 def _extract_docx(data: bytes) -> str:
+    # Guard against a decompression bomb BEFORE python-docx reads any member: the ZIP central
+    # directory lists each part's declared uncompressed size, and reading infolist() only parses
+    # that metadata -- it does not decompress. Reject if the total exceeds the cap.
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
+    except Exception as exc:  # noqa: BLE001 -- deliberate parse boundary, re-raised as a 4xx
+        raise ResumeParseError("Could not read the Word (.docx) file.") from exc
+    if total_uncompressed > MAX_DECOMPRESSED_BYTES:
+        raise ResumeParseError("The .docx file is too large when decompressed.")
+
     # python-docx raises a variety of errors on a bad file (PackageNotFoundError, BadZipFile, ...);
     # treat them all as an unreadable upload.
     try:

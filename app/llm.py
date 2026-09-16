@@ -32,26 +32,29 @@ def _job_posting_snippet(job_posting: str, max_chars: int = 180) -> str:
 
 def _mock_generate_questions(job_posting: str, resume_text: str | None = None) -> list[str]:
     posting = _job_posting_snippet(job_posting)
-    questions = [
+    if resume_text and resume_text.strip():
+        resume = _job_posting_snippet(resume_text)
+        # Mirror the real 3-posting / 2-resume blend so USE_MOCK_LLM=true exercises the split
+        # end to end: three questions grounded in the posting, two in the resume.
+        return [
+            f'The posting describes: "{posting}" — tell me about your experience with the '
+            "responsibilities and technologies it lists.",
+            f'This role ("{posting}") leans on specific technical skills — walk me through your '
+            "depth in the one most central to it.",
+            f'Given the responsibilities in this posting ("{posting}"), how would you approach the '
+            "first significant task you would own in the role?",
+            f'Your resume mentions: "{resume}" — walk me through that project or role in depth: '
+            "your specific contributions and the hardest problem you solved.",
+            "Pick one skill or technology listed on your resume and explain, with a concrete "
+            "example, how you've applied it.",
+        ]
+    return [
         "Walk me through your approach to debugging a complex issue you've encountered. What tools and techniques do you rely on?",
         f'The posting describes: "{posting}" — tell me about your experience with the responsibilities and technologies it lists.',
         "Describe a project you're proud of. What was your role, and what tradeoffs did you make during the design?",
         "How do you decide when to write tests, and what kinds of tests do you find most valuable in practice?",
         "Tell me about a time you disagreed with a teammate about a technical decision. How did you resolve it?",
     ]
-    if resume_text and resume_text.strip():
-        resume = _job_posting_snippet(resume_text)
-        # Resume present: replace the last two (generic behavioral) slots with resume-grounded
-        # questions so USE_MOCK_LLM=true exercises the 3-posting / 2-resume blend end to end.
-        questions[3] = (
-            f'Your resume mentions: "{resume}" — walk me through that project or role in depth: '
-            "your specific contributions and the hardest problem you solved."
-        )
-        questions[4] = (
-            "Pick one skill or technology listed on your resume and explain, with a concrete "
-            "example, how you've applied it."
-        )
-    return questions
 
 
 def _build_questions_system_prompt(resume_included: bool) -> str:

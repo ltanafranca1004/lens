@@ -113,16 +113,22 @@ async def upload_resume(
             detail="Questions have already been generated; upload the resume before generating.",
         )
 
-    data = await file.read()
+    # Reject an oversized upload without materializing the whole body in memory: check the
+    # parser-reported size when available, and read at most one byte past the cap so a large
+    # body can't be fully loaded into a bytes object here.
+    too_large = HTTPException(
+        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        detail=f"Resume file is too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB).",
+    )
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+        raise too_large
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise too_large
     if not data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty.",
-        )
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Resume file is too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB).",
         )
 
     try:
