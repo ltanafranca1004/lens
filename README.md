@@ -21,14 +21,6 @@ Lens is a web app for practicing technical interviews. Paste a real job posting,
 
 Built for students and job seekers preparing for co-op and internship interviews who want feedback sharper than "looks good."
 
-## Screenshots
-
-| | |
-|---|---|
-| ![Paste a job posting](docs/screenshots/01-new-session.jpg) **Paste the posting** — Lens turns it into five role-shaped questions. | ![Graded with evidence](docs/screenshots/02-feedback-rubric.jpg) **Graded with evidence** — every score points at the exact phrase that earned it. |
-| ![Session summary](docs/screenshots/03-summary.jpg) **Session summary** — every answer, marked up, color-coded by dimension. | ![What to study next](docs/screenshots/04-study-note.jpg) **What to study next** — a targeted note built from your weakest dimensions. |
-| ![Session history](docs/screenshots/05-history.jpg) **Session history** — every past session, filed for later. | |
-
 ## Key features
 
 - **Four-dimension rubric grading** — every answer is scored on *completeness*, *substance density*, *reasoning*, and *correctness* (1–5 each), not a single opaque number. Each dimension score is backed by a direct quote from the answer, validated server-side against the actual submitted text before it's ever shown.
@@ -187,7 +179,6 @@ lens/
 │       ├── components/          # Answer feedback, voice input, layout, UI primitives
 │       ├── lib/                 # API client, auth context, rubric logic, TTS worker
 │       └── hooks/
-└── docs/screenshots/        # README images
 ```
 
 ## Getting started
@@ -276,7 +267,3 @@ Lens's own code is [MIT-licensed](LICENSE). The optional "natural voice" text-to
 ## Author
 
 **Luis Tanafranca** — [github.com/ltanafranca1004](https://github.com/ltanafranca1004)
-
----
-
-🤖 README generated with [Claude Code](https://claude.com/claude-code), from a live walkthrough of the running app.
