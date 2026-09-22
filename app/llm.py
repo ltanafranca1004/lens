@@ -32,17 +32,21 @@ def _get_client() -> Groq:
     return Groq(api_key=api_key, max_retries=0, timeout=timeout)
 
 
+MAX_GROQ_RETRY_AFTER = 3600  # never tell a user to wait more than an hour
+
+
 def _groq_retry_after(exc: RateLimitError) -> int | None:
-    """Groq's suggested wait in whole seconds (rounded up), from `retry-after-ms` or `retry-after`
-    (seconds, possibly fractional). None when absent or unparseable."""
+    """Groq's suggested wait in whole seconds (rounded up, capped at MAX_GROQ_RETRY_AFTER), from
+    `retry-after-ms` or `retry-after` (seconds, possibly fractional). None when absent, unparseable,
+    non-positive or non-finite (inf/nan), so the caller falls back to its default."""
     headers = getattr(getattr(exc, "response", None), "headers", None) or {}
     for name, scale in (("retry-after-ms", 1000), ("retry-after", 1)):
         try:
             value = float(headers.get(name)) / scale
         except (TypeError, ValueError):
             continue
-        if value > 0:
-            return math.ceil(value)
+        if math.isfinite(value) and value > 0:
+            return min(math.ceil(value), MAX_GROQ_RETRY_AFTER)
     return None
 
 

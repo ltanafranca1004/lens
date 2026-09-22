@@ -157,10 +157,16 @@ class ErrorResponses(unittest.TestCase):
             ({"retry-after": "36.2"}, "37", "37 seconds"),
             ({"retry-after": "120"}, "120", "2 minutes"),
             ({"retry-after": "soon"}, "60", "1 minute"),  # unparseable -> default
+            ({"retry-after": "inf"}, "60", "1 minute"),  # non-finite -> default, not a 500
+            ({"retry-after-ms": "inf"}, "60", "1 minute"),
+            ({"retry-after": "nan"}, "60", "1 minute"),
+            ({"retry-after": "-5"}, "60", "1 minute"),  # non-positive -> default
+            ({"retry-after": "1e308"}, "3600", "1 hour"),  # huge finite -> capped at an hour
             ({}, "60", "1 minute"),  # absent -> default
         ]
         for headers, retry_after, phrase in cases:
             with self.subTest(headers=headers):
+                ratelimit.store.reset()  # many /answer calls in one test; keep our own limiter out of it
                 exc = groq.RateLimitError(
                     "rl", response=httpx.Response(429, headers=headers, request=_REQ), body=None
                 )

@@ -37,8 +37,11 @@ def _wait_phrase(seconds: int) -> str:
         return "a few seconds"
     if seconds < 60:
         return f"{seconds} seconds"
-    minutes = math.ceil(seconds / 60)
-    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    if seconds < 3600:
+        minutes = math.ceil(seconds / 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours = math.ceil(seconds / 3600)
+    return f"{hours} hour{'s' if hours != 1 else ''}"
 
 
 class LLMUnavailable(LLMError):
