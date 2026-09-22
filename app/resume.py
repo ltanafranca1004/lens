@@ -8,7 +8,7 @@ import io
 import zipfile
 
 from docx import Document
-from pypdf import PdfReader
+from pypdf import PdfReader, apply_configuration
 
 # Cap the accepted upload and the stored text. MAX_RESUME_CHARS keeps job posting + resume within one
 # Groq request's token budget (free tier: 8,000 tokens/minute), alongside schemas.SessionCreate's cap.
@@ -19,6 +19,20 @@ MAX_PDF_PAGES = 5
 # A real resume expands to well under this, so cap the total declared uncompressed size and reject
 # before python-docx decompresses any member. Generous enough for resumes with embedded images.
 MAX_DECOMPRESSED_BYTES = 50 * 1024 * 1024  # 50 MB
+# pypdf's per-stream decode limits default to 75 MB each; a text resume's streams are tiny, so cap
+# them far lower. These bound each stream, not the whole parse -- the page cap and the route's parse
+# timeout bound the rest.
+_PDF_STREAM_LIMIT = 10 * 1024 * 1024  # 10 MB
+_PDF_LIMITS = {
+    "maximum_declared_stream_length": _PDF_STREAM_LIMIT,
+    "array_based_stream_maximum_output_length": _PDF_STREAM_LIMIT,
+    "zlib_maximum_output_length": _PDF_STREAM_LIMIT,
+    "lzw_maximum_output_length": _PDF_STREAM_LIMIT,
+    "run_length_maximum_output_length": _PDF_STREAM_LIMIT,
+    "jbig2_maximum_output_length": _PDF_STREAM_LIMIT,
+    "image_maximum_buffer_size": _PDF_STREAM_LIMIT,
+    "xform_maximum_invocations_per_extraction": 500,
+}
 
 # File type is decided by content, never by the client-supplied filename.
 _PDF_MAGIC = b"%PDF-"
@@ -40,8 +54,14 @@ def _normalize(text: str) -> str:
 
 
 def _extract_pdf(data: bytes) -> str:
-    # Parse boundary: any failure on untrusted bytes (corrupt/encrypted PDF, pypdf internals)
-    # becomes a clean ResumeParseError rather than a 500.
+    # apply_configuration is context-scoped (a ContextVar), so it is safe in the upload worker thread.
+    with apply_configuration(**_PDF_LIMITS):
+        return _extract_pdf_limited(data)
+
+
+def _extract_pdf_limited(data: bytes) -> str:
+    # Parse boundary: any failure on untrusted bytes (corrupt/encrypted PDF, pypdf internals,
+    # a tripped pypdf limit) becomes a clean ResumeParseError rather than a 500.
     try:
         reader = PdfReader(io.BytesIO(data))
         page_count = len(reader.pages)

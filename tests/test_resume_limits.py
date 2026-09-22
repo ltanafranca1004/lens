@@ -14,10 +14,13 @@ from unittest import mock
 
 from docx import Document
 from fastapi.testclient import TestClient
-from pypdf import PdfWriter
+import pypdf
+from pypdf import PdfReader, PdfWriter
+from pypdf.errors import LimitReachedError
+from pypdf.generic import DecodedStreamObject, NameObject
 
 import main
-from app import ratelimit
+from app import ratelimit, resume as resume_mod
 from app.auth import get_current_user
 from app.database import get_db
 from app.resume import MAX_PDF_PAGES, ResumeParseError, extract_resume_text
@@ -74,6 +77,31 @@ class PdfPageCap(unittest.TestCase):
         # Blank pages have no text, so this reaches (and fails at) the no-text check, not the cap.
         with self.assertRaisesRegex(ResumeParseError, "No text could be extracted"):
             extract_resume_text(_pdf(MAX_PDF_PAGES))
+
+
+class PdfStreamLimits(unittest.TestCase):
+    def test_limits_are_applied_during_pdf_parsing(self):
+        seen = {}
+
+        def capture(_data):
+            seen["zlib"] = pypdf.get_configuration().zlib_maximum_output_length
+            return "text"
+
+        with mock.patch.object(resume_mod, "_extract_pdf_limited", capture):
+            resume_mod._extract_pdf(b"%PDF-")
+        self.assertEqual(seen["zlib"], resume_mod._PDF_STREAM_LIMIT)
+        self.assertEqual(pypdf.get_configuration().zlib_maximum_output_length, 75_000_000)  # restored
+
+    def test_oversized_stream_trips_the_limit(self):
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        stream = DecodedStreamObject()
+        stream.set_data(b" " * (resume_mod._PDF_STREAM_LIMIT + 1))  # compresses to a few KB
+        page[NameObject("/Contents")] = writer._add_object(stream.flate_encode())
+        buf = io.BytesIO()
+        writer.write(buf)
+        with pypdf.apply_configuration(**resume_mod._PDF_LIMITS), self.assertRaises(LimitReachedError):
+            PdfReader(io.BytesIO(buf.getvalue())).pages[0].get_contents().get_data()
 
 
 class UploadRoute(unittest.TestCase):
