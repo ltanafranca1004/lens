@@ -136,7 +136,8 @@ class ErrorResponses(unittest.TestCase):
 
     def test_status_and_detail_per_failure(self):
         expected = {
-            LLMRateLimited: (429, "The AI service is busy right now. Please wait a minute and try again."),
+            # No retry-after header on this mock 429, so the 60s default applies.
+            LLMRateLimited: (429, "The AI service is busy right now. Please wait 1 minute and try again."),
             LLMUnavailable: (503, "The AI service is temporarily unavailable. Please try again shortly."),
         }
         for name, exc, err_cls in CASES:
@@ -148,9 +149,34 @@ class ErrorResponses(unittest.TestCase):
                 # Rendered inside CORSMiddleware, so the browser can read the message.
                 self.assertEqual(r.headers.get("access-control-allow-origin"), "http://localhost:5173")
 
-    def test_rate_limited_sets_retry_after(self):
-        r = self._answer_with(_raising_client(_status_error(groq.RateLimitError, 429)))
-        self.assertEqual(r.headers.get("retry-after"), "60")
+    def test_rate_limited_passes_groq_wait_through(self):
+        cases = [
+            ({"retry-after": "0.825"}, "1", "a few seconds"),
+            ({"retry-after-ms": "825"}, "1", "a few seconds"),
+            ({"retry-after": "7"}, "7", "a few seconds"),
+            ({"retry-after": "36.2"}, "37", "37 seconds"),
+            ({"retry-after": "120"}, "120", "2 minutes"),
+            ({"retry-after": "soon"}, "60", "1 minute"),  # unparseable -> default
+            ({}, "60", "1 minute"),  # absent -> default
+        ]
+        for headers, retry_after, phrase in cases:
+            with self.subTest(headers=headers):
+                exc = groq.RateLimitError(
+                    "rl", response=httpx.Response(429, headers=headers, request=_REQ), body=None
+                )
+                r = self._answer_with(_raising_client(exc))
+                self.assertEqual(r.status_code, 429)
+                self.assertEqual(r.headers.get("retry-after"), retry_after)
+                self.assertEqual(
+                    r.json()["detail"],
+                    f"The AI service is busy right now. Please wait {phrase} and try again.",
+                )
+
+    def test_client_still_never_retries(self):
+        exc = _status_error(groq.RateLimitError, 429)
+        client = _raising_client(exc)
+        self._answer_with(client)
+        self.assertEqual(client.chat.completions.create.call_count, 1)
 
     def test_bad_response_is_502(self):
         r = self._answer_with(_content_client("not json"))

@@ -46,7 +46,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 # shows as-is. Class-specific handlers run inside CORSMiddleware, so CORS headers apply normally.
 @app.exception_handler(LLMError)
 async def llm_error_handler(request: Request, exc: LLMError) -> JSONResponse:
-    headers = {"Retry-After": "60"} if isinstance(exc, LLMRateLimited) else None
+    headers = {"Retry-After": str(exc.retry_after)} if isinstance(exc, LLMRateLimited) else None
     return JSONResponse(
         status_code=exc.status_code, content={"detail": exc.message}, headers=headers
     )

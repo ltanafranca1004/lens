@@ -4,6 +4,7 @@ Each carries the HTTP status and a plain, user-facing message; main.py maps any 
 a JSON response with that message as "detail" (the frontend shows detail as-is). Internal details
 (raw model output, Groq's own error text) are logged, never returned to the client.
 """
+import math
 
 
 class LLMError(Exception):
@@ -16,10 +17,28 @@ class LLMError(Exception):
 
 
 class LLMRateLimited(LLMError):
-    """Groq itself returned 429 (org-wide RPM/TPM/RPD/TPD limits)."""
+    """Groq itself returned 429 (org-wide RPM/TPM/RPD/TPD limits). Carries Groq's own retry wait,
+    rounded up to whole seconds, for the message and the Retry-After header."""
 
     status_code = 429
-    message = "The AI service is busy right now. Please wait a minute and try again."
+    DEFAULT_RETRY_AFTER = 60  # when Groq sends no usable retry-after header
+
+    def __init__(self, internal: str = "", retry_after: int | None = None):
+        self.retry_after = retry_after if retry_after and retry_after > 0 else self.DEFAULT_RETRY_AFTER
+        super().__init__(internal)
+
+    @property
+    def message(self) -> str:  # type: ignore[override]
+        return f"The AI service is busy right now. Please wait {_wait_phrase(self.retry_after)} and try again."
+
+
+def _wait_phrase(seconds: int) -> str:
+    if seconds <= 10:
+        return "a few seconds"
+    if seconds < 60:
+        return f"{seconds} seconds"
+    minutes = math.ceil(seconds / 60)
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
 
 
 class LLMUnavailable(LLMError):

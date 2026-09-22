@@ -32,6 +32,20 @@ def _get_client() -> Groq:
     return Groq(api_key=api_key, max_retries=0, timeout=timeout)
 
 
+def _groq_retry_after(exc: RateLimitError) -> int | None:
+    """Groq's suggested wait in whole seconds (rounded up), from `retry-after-ms` or `retry-after`
+    (seconds, possibly fractional). None when absent or unparseable."""
+    headers = getattr(getattr(exc, "response", None), "headers", None) or {}
+    for name, scale in (("retry-after-ms", 1000), ("retry-after", 1)):
+        try:
+            value = float(headers.get(name)) / scale
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return math.ceil(value)
+    return None
+
+
 def _chat(messages: list[dict], stage: str) -> dict:
     """One JSON-mode Groq completion, parsed. Shared by every real (non-mock) LLM call.
 
@@ -51,7 +65,9 @@ def _chat(messages: list[dict], stage: str) -> dict:
     except RateLimitError as exc:
         groq_usage.settle(reservation, 0)  # rejected up front: nothing was generated
         logger.warning("Groq rate limited during %s: %s", stage, exc)
-        raise LLMRateLimited(f"Groq 429 during {stage}: {exc}") from exc
+        raise LLMRateLimited(
+            f"Groq 429 during {stage}: {exc}", retry_after=_groq_retry_after(exc)
+        ) from exc
     except APIStatusError as exc:
         groq_usage.settle(reservation, 0)
         logger.error("Groq API call failed during %s: %s", stage, exc)
