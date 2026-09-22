@@ -12,6 +12,7 @@ Storage sits behind UsageStore so tests and local dev can use the in-memory stor
 import logging
 import os
 import threading
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Protocol
 
@@ -25,20 +26,27 @@ logger = logging.getLogger(__name__)
 # 90% of Groq's free-tier RPD / TPD, leaving headroom for calls already in flight.
 DEFAULT_DAILY_CALL_CAP = 900
 DEFAULT_DAILY_TOKEN_CAP = 180_000
+# Tokens reserved per call before it runs, then reconciled to the real usage afterwards. Measured
+# ~630 per question generation and ~1,700 per answer evaluation, so this errs slightly high.
+DEFAULT_TOKENS_PER_CALL_ESTIMATE = 2_000
 
 
 class UsageStore(Protocol):
-    def reserve_call(self, day: date) -> tuple[int, int]:
-        """Atomically count one more call for `day`; return (calls incl. this one, tokens so far)."""
+    def reserve_call(self, day: date, tokens: int) -> tuple[int, int]:
+        """Atomically count one more call and `tokens` reserved tokens for `day`; return the new
+        (calls, tokens) totals, including this reservation."""
         ...
 
-    def add_tokens(self, day: date, tokens: int) -> None: ...
+    def add_tokens(self, day: date, tokens: int) -> None:
+        """Adjust `day`'s token total by `tokens` (negative to release part of a reservation)."""
+        ...
 
 
-# Upsert-and-increment in one statement, so concurrent requests can't both read the same count.
+# Upsert-and-increment in one statement, so concurrent requests each see the others' reservations.
 _RESERVE_SQL = text(
-    "INSERT INTO groq_daily_usage (day, calls, tokens) VALUES (:day, 1, 0) "
-    "ON CONFLICT (day) DO UPDATE SET calls = groq_daily_usage.calls + 1 "
+    "INSERT INTO groq_daily_usage (day, calls, tokens) VALUES (:day, 1, :tokens) "
+    "ON CONFLICT (day) DO UPDATE SET calls = groq_daily_usage.calls + 1, "
+    "tokens = groq_daily_usage.tokens + :tokens "
     "RETURNING calls, tokens"
 )
 _ADD_TOKENS_SQL = text(
@@ -50,11 +58,11 @@ _ADD_TOKENS_SQL = text(
 class PostgresUsageStore:
     """Runs on its own short connection, so the count commits even if the request later rolls back."""
 
-    def reserve_call(self, day: date) -> tuple[int, int]:
+    def reserve_call(self, day: date, tokens: int) -> tuple[int, int]:
         from app.database import engine  # lazy: app.database builds the engine at import time
 
         with engine.begin() as conn:
-            row = conn.execute(_RESERVE_SQL, {"day": day}).one()
+            row = conn.execute(_RESERVE_SQL, {"day": day, "tokens": tokens}).one()
         return row.calls, row.tokens
 
     def add_tokens(self, day: date, tokens: int) -> None:
@@ -69,10 +77,11 @@ class InMemoryUsageStore:
         self._lock = threading.Lock()
         self._rows: dict[date, list[int]] = {}
 
-    def reserve_call(self, day: date) -> tuple[int, int]:
+    def reserve_call(self, day: date, tokens: int) -> tuple[int, int]:
         with self._lock:
             row = self._rows.setdefault(day, [0, 0])
             row[0] += 1
+            row[1] += tokens
             return row[0], row[1]
 
     def add_tokens(self, day: date, tokens: int) -> None:
@@ -109,30 +118,51 @@ def _today() -> date:
     return datetime.now(timezone.utc).date()
 
 
-def reserve_call() -> None:
-    """Count one Groq call against today's budget, or raise LLMBudgetExhausted if a cap is hit.
+@dataclass(frozen=True)
+class Reservation:
+    day: date
+    tokens: int
 
-    Attempts are counted even if the call then fails -- deliberate for a circuit breaker. A database
-    error fails closed (LLMUnavailable) rather than letting calls through uncounted.
+
+def reserve_call() -> Reservation:
+    """Reserve one Groq call plus an estimated token allowance against today's budget, or raise
+    LLMBudgetExhausted if either cap would be exceeded.
+
+    The estimate is added in the same atomic upsert as the call count, so concurrent calls see each
+    other's reservations and can't collectively overshoot the token cap by more than one estimate
+    each. settle() reconciles it to real usage afterwards. Attempts are counted even if the call
+    then fails -- deliberate for a circuit breaker. A database error fails closed (LLMUnavailable)
+    rather than letting calls through uncounted.
     """
+    day = _today()
+    estimate = _env_int("GROQ_TOKENS_PER_CALL_ESTIMATE", DEFAULT_TOKENS_PER_CALL_ESTIMATE)
     try:
-        calls, tokens = get_store().reserve_call(_today())
+        calls, tokens = get_store().reserve_call(day, estimate)
     except SQLAlchemyError as exc:
         logger.exception("Could not reserve Groq budget")
         raise LLMUnavailable(f"usage store error: {exc}") from exc
     call_cap = _env_int("GROQ_DAILY_CALL_CAP", DEFAULT_DAILY_CALL_CAP)
     token_cap = _env_int("GROQ_DAILY_TOKEN_CAP", DEFAULT_DAILY_TOKEN_CAP)
-    if calls > call_cap or tokens >= token_cap:
+    if calls > call_cap or tokens > token_cap:
         logger.warning("Groq daily cap reached: calls=%s/%s tokens=%s/%s", calls, call_cap, tokens, token_cap)
         raise LLMBudgetExhausted(f"daily Groq cap reached: calls={calls} tokens={tokens}")
+    return Reservation(day=day, tokens=estimate)
 
 
-def record_tokens(tokens: int) -> None:
-    """Add a completed call's token usage to today's row. Best-effort: a failure here is logged,
-    never surfaced, since the user's call already succeeded."""
-    if tokens <= 0:
+def settle(reservation: Reservation, actual_tokens: int | None) -> None:
+    """Replace a reservation's estimate with the call's real token usage.
+
+    Pass 0 when the call failed before Groq generated anything, releasing the estimate; pass None
+    when usage is unknown, keeping the estimate. Best-effort: if this write fails, the estimate
+    stays counted (the total errs high, never low), and the error is logged, not surfaced, since
+    the user's call has already completed.
+    """
+    if actual_tokens is None:
+        return
+    delta = actual_tokens - reservation.tokens
+    if delta == 0:
         return
     try:
-        get_store().add_tokens(_today(), tokens)
+        get_store().add_tokens(reservation.day, delta)
     except SQLAlchemyError:
-        logger.exception("Could not record Groq token usage")
+        logger.exception("Could not reconcile Groq token usage")

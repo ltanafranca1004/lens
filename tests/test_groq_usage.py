@@ -11,6 +11,8 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+import groq
+import httpx
 from fastapi.testclient import TestClient
 
 import app.llm as L
@@ -18,7 +20,7 @@ import main
 from app import groq_usage, ratelimit
 from app.auth import get_current_user
 from app.database import get_db
-from app.llm_errors import LLMBudgetExhausted
+from app.llm_errors import LLMBudgetExhausted, LLMRateLimited, LLMUnavailable
 
 
 def _fake_client(content: str, total_tokens: int = 1000):
@@ -58,20 +60,73 @@ class DailyCap(unittest.TestCase):
 
     def test_token_cap(self):
         client = _fake_client(_STUDY_JSON, total_tokens=600)
-        with mock.patch.dict(os.environ, {"GROQ_DAILY_CALL_CAP": "100", "GROQ_DAILY_TOKEN_CAP": "1000"}):
-            self._call(client)  # 600 tokens
-            self._call(client)  # 1200 tokens recorded after this one
+        env = {
+            "GROQ_DAILY_CALL_CAP": "100",
+            "GROQ_DAILY_TOKEN_CAP": "1000",
+            "GROQ_TOKENS_PER_CALL_ESTIMATE": "100",
+        }
+        with mock.patch.dict(os.environ, env):
+            self._call(client)  # reserves 100 (total 100), settles to 600
+            self._call(client)  # reserves 100 (total 700), settles to 1200
             with self.assertRaises(LLMBudgetExhausted):
-                self._call(client)
+                self._call(client)  # reserving 100 more would reach 1300 > 1000
+        self.assertEqual(client.chat.completions.create.call_count, 2)
 
-    def test_tokens_recorded_from_usage(self):
-        self._call(_fake_client(_STUDY_JSON, total_tokens=1234))
-        self.assertEqual(self.store.reserve_call(groq_usage._today()), (2, 1234))
+    def test_reservation_settles_to_actual_usage(self):
+        with mock.patch.dict(os.environ, {"GROQ_TOKENS_PER_CALL_ESTIMATE": "2000"}):
+            self._call(_fake_client(_STUDY_JSON, total_tokens=1234))
+        self.assertEqual(self._totals(), (1, 1234))
+
+    def test_concurrent_reservations_count_before_any_call_finishes(self):
+        # Two calls in flight reserve their estimates up front, so a third is refused even though
+        # neither has reported real usage yet.
+        env = {"GROQ_DAILY_TOKEN_CAP": "4500", "GROQ_TOKENS_PER_CALL_ESTIMATE": "2000"}
+        with mock.patch.dict(os.environ, env):
+            groq_usage.reserve_call()
+            groq_usage.reserve_call()
+            with self.assertRaises(LLMBudgetExhausted):
+                groq_usage.reserve_call()
+
+    def test_rejected_call_releases_its_estimate(self):
+        req = httpx.Request("POST", "https://api.groq.com")
+        client = mock.Mock()
+        client.chat.completions.create.side_effect = groq.RateLimitError(
+            "rl", response=httpx.Response(429, request=req), body=None
+        )
+        with self.assertRaises(LLMRateLimited):
+            self._call(client)
+        self.assertEqual(self._totals(), (1, 0))
+
+    def test_timeout_keeps_its_estimate(self):
+        client = mock.Mock()
+        client.chat.completions.create.side_effect = groq.APITimeoutError(
+            request=httpx.Request("POST", "https://api.groq.com")
+        )
+        with mock.patch.dict(os.environ, {"GROQ_TOKENS_PER_CALL_ESTIMATE": "2000"}):
+            with self.assertRaises(LLMUnavailable):
+                self._call(client)
+        self.assertEqual(self._totals(), (1, 2000))
+
+    def test_failed_reconcile_keeps_estimate_and_does_not_raise(self):
+        class FailingSettle(groq_usage.InMemoryUsageStore):
+            def add_tokens(self, day, tokens):
+                raise groq_usage.SQLAlchemyError("db down")
+
+        store = FailingSettle()
+        groq_usage.set_store(store)
+        with mock.patch.dict(os.environ, {"GROQ_TOKENS_PER_CALL_ESTIMATE": "2000"}):
+            self.assertEqual(self._call(_fake_client(_STUDY_JSON, total_tokens=500)), "Review closures.")
+        self.assertEqual(store.reserve_call(groq_usage._today(), 0), (2, 2000))  # errs high, not low
 
     def test_mock_mode_does_not_count(self):
         with mock.patch.object(L, "_is_mock_mode", return_value=True):
             L.generate_study_note(_WEAK)
-        self.assertEqual(self.store.reserve_call(groq_usage._today()), (1, 0))
+        self.assertEqual(self._totals(), (0, 0))
+
+    def _totals(self):
+        """Current (calls, tokens) for today, read without changing them."""
+        calls, tokens = self.store.reserve_call(groq_usage._today(), 0)  # counts itself; undo below
+        return calls - 1, tokens
 
 
 class DailyCapThroughRoute(unittest.TestCase):

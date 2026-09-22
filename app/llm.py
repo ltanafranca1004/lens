@@ -5,7 +5,7 @@ import os
 import re
 
 from dotenv import load_dotenv
-from groq import APIError, Groq, RateLimitError
+from groq import APIError, APIStatusError, Groq, RateLimitError
 
 from app import groq_usage
 from app.llm_errors import LLMBadResponse, LLMRateLimited, LLMUnavailable
@@ -35,11 +35,13 @@ def _get_client() -> Groq:
 def _chat(messages: list[dict], stage: str) -> dict:
     """One JSON-mode Groq completion, parsed. Shared by every real (non-mock) LLM call.
 
-    Reserves the global daily budget first, maps Groq failures to typed LLMErrors (logging the
-    internal detail), records token usage, and returns the parsed JSON object.
+    Reserves the global daily budget first, maps Groq failures to typed LLMErrors, reconciles the
+    reservation with real token usage, and returns the parsed JSON object. Logs and exception
+    messages carry the stage and failure only, never the model payload: it can echo candidate
+    answers, resume details and study-note evidence.
     """
     client = _get_client()
-    groq_usage.reserve_call()
+    reservation = groq_usage.reserve_call()
     try:
         response = client.chat.completions.create(
             model=GROQ_MODEL,
@@ -47,25 +49,35 @@ def _chat(messages: list[dict], stage: str) -> dict:
             response_format={"type": "json_object"},
         )
     except RateLimitError as exc:
+        groq_usage.settle(reservation, 0)  # rejected up front: nothing was generated
         logger.warning("Groq rate limited during %s: %s", stage, exc)
         raise LLMRateLimited(f"Groq 429 during {stage}: {exc}") from exc
+    except APIStatusError as exc:
+        groq_usage.settle(reservation, 0)
+        logger.error("Groq API call failed during %s: %s", stage, exc)
+        raise LLMUnavailable(f"Groq API call failed during {stage}: {exc}") from exc
     except APIError as exc:
+        # Timeout or connection error: Groq may have generated tokens, so keep the estimate.
         logger.error("Groq API call failed during %s: %s", stage, exc)
         raise LLMUnavailable(f"Groq API call failed during {stage}: {exc}") from exc
 
     tokens = getattr(getattr(response, "usage", None), "total_tokens", None)
-    if isinstance(tokens, int):
-        groq_usage.record_tokens(tokens)
+    groq_usage.settle(reservation, tokens if isinstance(tokens, int) else None)
 
-    content = response.choices[0].message.content
+    choices = getattr(response, "choices", None)
+    message = getattr(choices[0], "message", None) if choices else None
+    content = getattr(message, "content", None)
+    if not isinstance(content, str):
+        logger.error("Groq %s response had no message content", stage)
+        raise LLMBadResponse(f"Groq {stage} response had no message content")
     try:
         data = json.loads(content)
-    except (json.JSONDecodeError, TypeError) as exc:
-        logger.error("Unparseable Groq %s response: %r", stage, content)
-        raise LLMBadResponse(f"Could not parse Groq {stage} response as JSON: {content!r}") from exc
+    except json.JSONDecodeError as exc:
+        logger.error("Unparseable Groq %s response (%d chars)", stage, len(content))
+        raise LLMBadResponse(f"Could not parse Groq {stage} response as JSON") from exc
     if not isinstance(data, dict):
-        logger.error("Non-object Groq %s response: %r", stage, content)
-        raise LLMBadResponse(f"Groq {stage} response was not a JSON object: {content!r}")
+        logger.error("Non-object Groq %s response (%s)", stage, type(data).__name__)
+        raise LLMBadResponse(f"Groq {stage} response was not a JSON object")
     return data
 
 
@@ -173,8 +185,8 @@ def generate_questions(job_posting: str, resume_text: str | None = None) -> list
         or len(questions) != 5
         or not all(isinstance(q, str) for q in questions)
     ):
-        logger.error("Unexpected Groq question shape: %r", data)
-        raise LLMBadResponse(f"Groq returned an unexpected shape for questions: {data!r}")
+        logger.error("Unexpected Groq question shape")
+        raise LLMBadResponse("Groq returned an unexpected shape for questions")
 
     return questions
 
@@ -353,11 +365,11 @@ def _parse_dim(obj, name: str, answer: str) -> dict:
         raise LLMBadResponse(f"Groq evaluation missing or malformed dimension: {name!r}")
     raw = obj.get("score")
     if isinstance(raw, bool):
-        raise LLMBadResponse(f"Groq returned an invalid score for {name!r}: {raw!r}")
+        raise LLMBadResponse(f"Groq returned an invalid score for {name!r}")
     try:
         score = int(round(float(raw)))
     except (TypeError, ValueError):
-        raise LLMBadResponse(f"Groq returned a non-numeric score for {name!r}: {raw!r}")
+        raise LLMBadResponse(f"Groq returned a non-numeric score for {name!r}")
     score = max(1, min(5, score))
     evidence = obj.get("evidence", [])
     if isinstance(evidence, str):
@@ -534,7 +546,7 @@ def generate_study_note(weak_areas: list[dict]) -> str | None:
 
     note = data.get("study_note")
     if not isinstance(note, str) or not note.strip():
-        logger.error("Unexpected Groq study-note shape: %r", data)
-        raise LLMBadResponse(f"Groq returned an unexpected shape for the study note: {data!r}")
+        logger.error("Unexpected Groq study-note shape")
+        raise LLMBadResponse("Groq returned an unexpected shape for the study note")
 
     return note.strip()

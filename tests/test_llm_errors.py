@@ -73,6 +73,29 @@ class ErrorMapping(unittest.TestCase):
         with self.assertRaises(LLMBadResponse):
             self._evaluate(_content_client('{"completeness": {"score": 3}}'))
 
+    def test_malformed_completion_is_bad_response(self):
+        for name, choices in [
+            ("no choices", []),
+            ("no message", [mock.Mock(message=None)]),
+            ("no content", [mock.Mock(message=mock.Mock(content=None))]),
+        ]:
+            resp = mock.Mock(choices=choices, usage=None)
+            client = mock.Mock()
+            client.chat.completions.create.return_value = resp
+            with self.subTest(name), self.assertRaises(LLMBadResponse):
+                self._evaluate(client)
+
+    def test_model_payload_never_logged_or_in_error(self):
+        secret = "my-private-answer-detail-12345"
+        for content in (f"not json {secret}", f'["{secret}"]', f'{{"completeness": "{secret}"}}'):
+            with self.subTest(content=content), \
+                 mock.patch.object(L.logger, "error") as log_error, \
+                 self.assertRaises(LLMBadResponse) as ctx:
+                self._evaluate(_content_client(content))
+            logged = " ".join(str(a) for call in log_error.call_args_list for a in call.args)
+            self.assertNotIn(secret, logged)
+            self.assertNotIn(secret, str(ctx.exception))
+
     def test_missing_api_key_is_unavailable(self):
         with mock.patch.dict(os.environ, {"GROQ_API_KEY": ""}), self.assertRaises(LLMUnavailable):
             L._get_client()
