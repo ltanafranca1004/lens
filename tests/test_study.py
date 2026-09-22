@@ -9,7 +9,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 import app.llm as L
+from app import groq_usage
 import app.study as S
+from app.llm_errors import LLMBadResponse
+
+# Mocked Groq calls still pass the daily budget check; keep it off the database.
+groq_usage.set_store(groq_usage.InMemoryUsageStore())
 
 
 def _rubric(scores, reasoning="", evidence=None):
@@ -106,7 +111,7 @@ class GenerateStudyNote(unittest.TestCase):
         weak = [{"dimension": "substance", "average": 2.0, "items": [{"reasoning": "x", "evidence": []}]}]
         with mock.patch.object(L, "_is_mock_mode", return_value=False), \
              mock.patch.object(L, "_get_client", return_value=_fake_client(json.dumps({"wrong": "shape"}))):
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(LLMBadResponse):
                 L.generate_study_note(weak)
 
 

@@ -62,7 +62,8 @@ def build_study_note(questions) -> str | None:
     """Compute the weak dimension(s) and synthesize a study note grounded only in their evidence.
 
     Returns None when there is nothing to synthesize (no answered questions with a rubric). May
-    raise RuntimeError if the underlying LLM call fails; callers decide how to handle that.
+    raise LLMError (app/llm_errors.py) if the underlying LLM call fails; callers decide how to
+    handle that.
     """
     weak = compute_weak_dimensions(questions)
     if not weak:

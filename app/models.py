@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -53,3 +53,14 @@ class Question(Base):
     answered_at = Column(DateTime(timezone=True), nullable=True)
 
     session = relationship("Session", back_populates="questions")
+
+
+class GroqDailyUsage(Base):
+    """Global Groq usage per UTC day, the circuit breaker in app/groq_usage.py. One row per day;
+    written only through that module's atomic upserts."""
+
+    __tablename__ = "groq_daily_usage"
+
+    day = Column(Date, primary_key=True)
+    calls = Column(Integer, nullable=False, default=0, server_default="0")
+    tokens = Column(BigInteger, nullable=False, default=0, server_default="0")
