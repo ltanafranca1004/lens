@@ -145,6 +145,7 @@ def reserve_call() -> Reservation:
     token_cap = _env_int("GROQ_DAILY_TOKEN_CAP", DEFAULT_DAILY_TOKEN_CAP)
     if calls > call_cap or tokens > token_cap:
         logger.warning("Groq daily cap reached: calls=%s/%s tokens=%s/%s", calls, call_cap, tokens, token_cap)
+        settle(Reservation(day=day, tokens=estimate), 0)  # no call is made: release the estimate
         raise LLMBudgetExhausted(f"daily Groq cap reached: calls={calls} tokens={tokens}")
     return Reservation(day=day, tokens=estimate)
 

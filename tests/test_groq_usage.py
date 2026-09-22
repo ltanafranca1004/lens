@@ -87,6 +87,16 @@ class DailyCap(unittest.TestCase):
             with self.assertRaises(LLMBudgetExhausted):
                 groq_usage.reserve_call()
 
+    def test_cap_rejection_releases_its_estimate(self):
+        client = _fake_client(_STUDY_JSON, total_tokens=788)
+        env = {"GROQ_DAILY_CALL_CAP": "1", "GROQ_TOKENS_PER_CALL_ESTIMATE": "2000"}
+        with mock.patch.dict(os.environ, env):
+            self._call(client)
+            with self.assertRaises(LLMBudgetExhausted):
+                self._call(client)
+        # Only the real call's tokens remain; the refused call's estimate was released.
+        self.assertEqual(self._totals(), (2, 788))
+
     def test_rejected_call_releases_its_estimate(self):
         req = httpx.Request("POST", "https://api.groq.com")
         client = mock.Mock()
