@@ -9,6 +9,10 @@ import unittest
 from unittest import mock
 
 import app.llm as L
+from app import groq_usage
+
+# Mocked Groq calls still pass the daily budget check; keep it off the database.
+groq_usage.set_store(groq_usage.InMemoryUsageStore())
 
 
 def _scores(completeness, substance, reasoning, correctness):

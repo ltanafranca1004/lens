@@ -8,20 +8,37 @@ import io
 import zipfile
 
 from docx import Document
-from pypdf import PdfReader
+from pypdf import PdfReader, apply_configuration
 
-# Cap the accepted upload and the stored text. MAX_RESUME_CHARS matches the job_posting cap in
-# schemas.SessionCreate so both question-generation inputs are bounded the same way.
+# Cap the accepted upload and the stored text. MAX_RESUME_CHARS keeps job posting + resume within one
+# Groq request's token budget (free tier: 8,000 tokens/minute), alongside schemas.SessionCreate's cap.
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
-MAX_RESUME_CHARS = 20_000
+MAX_RESUME_CHARS = 8_000
+MAX_PDF_PAGES = 5
 # A DOCX is a ZIP; a small upload can declare a huge uncompressed payload (a decompression bomb).
 # A real resume expands to well under this, so cap the total declared uncompressed size and reject
 # before python-docx decompresses any member. Generous enough for resumes with embedded images.
 MAX_DECOMPRESSED_BYTES = 50 * 1024 * 1024  # 50 MB
+# pypdf's per-stream decode limits default to 75 MB each; a text resume's streams are tiny, so cap
+# them far lower. These bound each stream, not the whole parse -- the page cap and the route's parse
+# timeout bound the rest.
+_PDF_STREAM_LIMIT = 10 * 1024 * 1024  # 10 MB
+_PDF_LIMITS = {
+    "maximum_declared_stream_length": _PDF_STREAM_LIMIT,
+    "array_based_stream_maximum_output_length": _PDF_STREAM_LIMIT,
+    "zlib_maximum_output_length": _PDF_STREAM_LIMIT,
+    "lzw_maximum_output_length": _PDF_STREAM_LIMIT,
+    "run_length_maximum_output_length": _PDF_STREAM_LIMIT,
+    "jbig2_maximum_output_length": _PDF_STREAM_LIMIT,
+    "image_maximum_buffer_size": _PDF_STREAM_LIMIT,
+    "xform_maximum_invocations_per_extraction": 500,
+}
 
-_PDF_EXT = ".pdf"
-_DOCX_EXT = ".docx"
-SUPPORTED_EXTENSIONS = (_PDF_EXT, _DOCX_EXT)
+# File type is decided by content, never by the client-supplied filename.
+_PDF_MAGIC = b"%PDF-"
+_ZIP_MAGIC = b"PK\x03\x04"
+_DOCX_MAIN_PART = "word/document.xml"
+_UNSUPPORTED = "Unsupported file type. Upload a PDF or .docx resume."
 
 
 class ResumeParseError(Exception):
@@ -37,10 +54,23 @@ def _normalize(text: str) -> str:
 
 
 def _extract_pdf(data: bytes) -> str:
-    # Parse boundary: any failure on untrusted bytes (corrupt/encrypted PDF, pypdf internals)
-    # becomes a clean ResumeParseError rather than a 500.
+    # apply_configuration is context-scoped (a ContextVar), so it is safe in the upload worker thread.
+    with apply_configuration(**_PDF_LIMITS):
+        return _extract_pdf_limited(data)
+
+
+def _extract_pdf_limited(data: bytes) -> str:
+    # Parse boundary: any failure on untrusted bytes (corrupt/encrypted PDF, pypdf internals,
+    # a tripped pypdf limit) becomes a clean ResumeParseError rather than a 500.
     try:
         reader = PdfReader(io.BytesIO(data))
+        page_count = len(reader.pages)
+    except Exception as exc:  # noqa: BLE001 -- deliberate parse boundary, re-raised as a 4xx
+        raise ResumeParseError("Could not read the PDF file.") from exc
+    # Check the page count before extracting any text, so a huge PDF costs almost nothing.
+    if page_count > MAX_PDF_PAGES:
+        raise ResumeParseError(f"Resume PDFs can be at most {MAX_PDF_PAGES} pages.")
+    try:
         return "\n".join((page.extract_text() or "") for page in reader.pages)
     except Exception as exc:  # noqa: BLE001 -- deliberate parse boundary, re-raised as a 4xx
         raise ResumeParseError("Could not read the PDF file.") from exc
@@ -52,9 +82,13 @@ def _extract_docx(data: bytes) -> str:
     # that metadata -- it does not decompress. Reject if the total exceeds the cap.
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            total_uncompressed = sum(info.file_size for info in zf.infolist())
+            infos = zf.infolist()
     except Exception as exc:  # noqa: BLE001 -- deliberate parse boundary, re-raised as a 4xx
         raise ResumeParseError("Could not read the Word (.docx) file.") from exc
+    # Any ZIP starts with PK\x03\x04; a Word document is the one with this main part.
+    if not any(info.filename == _DOCX_MAIN_PART for info in infos):
+        raise ResumeParseError(_UNSUPPORTED)
+    total_uncompressed = sum(info.file_size for info in infos)
     if total_uncompressed > MAX_DECOMPRESSED_BYTES:
         raise ResumeParseError("The .docx file is too large when decompressed.")
 
@@ -67,21 +101,20 @@ def _extract_docx(data: bytes) -> str:
     return "\n".join(p.text for p in document.paragraphs)
 
 
-def extract_resume_text(filename: str, data: bytes) -> str:
+def extract_resume_text(data: bytes) -> str:
     """Parse an uploaded resume to normalized plain text.
 
-    Dispatches on the filename extension (a browser's declared content-type is unreliable, and the
-    upload is already constrained to .pdf/.docx by the client's accept filter). Raises
-    ResumeParseError on an unsupported type, a file that can't be parsed, or one with no extractable
-    text (e.g. a scanned/image-only PDF -- there is no OCR).
+    Dispatches on the file's content (PDF magic bytes, or a ZIP containing word/document.xml), not
+    its filename or declared content-type, both of which the client controls. Raises
+    ResumeParseError on an unsupported type, a PDF over MAX_PDF_PAGES, a file that can't be parsed,
+    or one with no extractable text (e.g. a scanned/image-only PDF -- there is no OCR).
     """
-    name = (filename or "").lower()
-    if name.endswith(_PDF_EXT):
+    if data.startswith(_PDF_MAGIC):
         text = _extract_pdf(data)
-    elif name.endswith(_DOCX_EXT):
+    elif data.startswith(_ZIP_MAGIC):
         text = _extract_docx(data)
     else:
-        raise ResumeParseError("Unsupported file type. Upload a PDF or .docx resume.")
+        raise ResumeParseError(_UNSUPPORTED)
 
     normalized = _normalize(text)
     if not normalized:

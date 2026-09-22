@@ -1,14 +1,21 @@
 import json
+import logging
 import math
 import os
 import re
 
 from dotenv import load_dotenv
-from groq import APIError, Groq
+from groq import APIError, APIStatusError, Groq, RateLimitError
+
+from app import groq_usage
+from app.llm_errors import LLMBadResponse, LLMRateLimited, LLMUnavailable
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 GROQ_MODEL = "openai/gpt-oss-120b"
+DEFAULT_GROQ_TIMEOUT_SECONDS = 30.0  # under the frontend's 60s request timeout
 
 
 def _is_mock_mode() -> bool:
@@ -18,8 +25,80 @@ def _is_mock_mode() -> bool:
 def _get_client() -> Groq:
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY is not set in the environment")
-    return Groq(api_key=api_key)
+        raise LLMUnavailable("GROQ_API_KEY is not set in the environment")
+    # No SDK retries (its default is 2): a Groq 429 must surface to the user, not be silently
+    # retried against the same org-wide limit while holding a worker thread.
+    timeout = float(os.getenv("GROQ_TIMEOUT_SECONDS") or DEFAULT_GROQ_TIMEOUT_SECONDS)
+    return Groq(api_key=api_key, max_retries=0, timeout=timeout)
+
+
+MAX_GROQ_RETRY_AFTER = 3600  # never tell a user to wait more than an hour
+
+
+def _groq_retry_after(exc: RateLimitError) -> int | None:
+    """Groq's suggested wait in whole seconds (rounded up, capped at MAX_GROQ_RETRY_AFTER), from
+    `retry-after-ms` or `retry-after` (seconds, possibly fractional). None when absent, unparseable,
+    non-positive or non-finite (inf/nan), so the caller falls back to its default."""
+    headers = getattr(getattr(exc, "response", None), "headers", None) or {}
+    for name, scale in (("retry-after-ms", 1000), ("retry-after", 1)):
+        try:
+            value = float(headers.get(name)) / scale
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and value > 0:
+            return min(math.ceil(value), MAX_GROQ_RETRY_AFTER)
+    return None
+
+
+def _chat(messages: list[dict], stage: str) -> dict:
+    """One JSON-mode Groq completion, parsed. Shared by every real (non-mock) LLM call.
+
+    Reserves the global daily budget first, maps Groq failures to typed LLMErrors, reconciles the
+    reservation with real token usage, and returns the parsed JSON object. Logs and exception
+    messages carry the stage and failure only, never the model payload: it can echo candidate
+    answers, resume details and study-note evidence.
+    """
+    client = _get_client()
+    reservation = groq_usage.reserve_call()
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            response_format={"type": "json_object"},
+        )
+    except RateLimitError as exc:
+        groq_usage.settle(reservation, 0)  # rejected up front: nothing was generated
+        logger.warning("Groq rate limited during %s: %s", stage, exc)
+        raise LLMRateLimited(
+            f"Groq 429 during {stage}: {exc}", retry_after=_groq_retry_after(exc)
+        ) from exc
+    except APIStatusError as exc:
+        groq_usage.settle(reservation, 0)
+        logger.error("Groq API call failed during %s: %s", stage, exc)
+        raise LLMUnavailable(f"Groq API call failed during {stage}: {exc}") from exc
+    except APIError as exc:
+        # Timeout or connection error: Groq may have generated tokens, so keep the estimate.
+        logger.error("Groq API call failed during %s: %s", stage, exc)
+        raise LLMUnavailable(f"Groq API call failed during {stage}: {exc}") from exc
+
+    tokens = getattr(getattr(response, "usage", None), "total_tokens", None)
+    groq_usage.settle(reservation, tokens if isinstance(tokens, int) else None)
+
+    choices = getattr(response, "choices", None)
+    message = getattr(choices[0], "message", None) if choices else None
+    content = getattr(message, "content", None)
+    if not isinstance(content, str):
+        logger.error("Groq %s response had no message content", stage)
+        raise LLMBadResponse(f"Groq {stage} response had no message content")
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        logger.error("Unparseable Groq %s response (%d chars)", stage, len(content))
+        raise LLMBadResponse(f"Could not parse Groq {stage} response as JSON") from exc
+    if not isinstance(data, dict):
+        logger.error("Non-object Groq %s response (%s)", stage, type(data).__name__)
+        raise LLMBadResponse(f"Groq {stage} response was not a JSON object")
+    return data
 
 
 def _job_posting_snippet(job_posting: str, max_chars: int = 180) -> str:
@@ -105,45 +184,29 @@ def generate_questions(job_posting: str, resume_text: str | None = None) -> list
     if _is_mock_mode():
         return _mock_generate_questions(job_posting, resume_text)
 
-    client = _get_client()
     resume_included = bool(resume_text and resume_text.strip())
 
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": _build_questions_system_prompt(resume_included)},
-                {
-                    "role": "user",
-                    "content": _build_questions_user_message(
-                        job_posting, resume_text if resume_included else None
-                    ),
-                },
-            ],
-            response_format={"type": "json_object"},
-        )
-    except APIError as exc:
-        raise RuntimeError(
-            f"Groq API call failed during question generation: {exc}"
-        ) from exc
+    data = _chat(
+        [
+            {"role": "system", "content": _build_questions_system_prompt(resume_included)},
+            {
+                "role": "user",
+                "content": _build_questions_user_message(
+                    job_posting, resume_text if resume_included else None
+                ),
+            },
+        ],
+        "question generation",
+    )
 
-    content = response.choices[0].message.content
-    try:
-        data = json.loads(content)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise RuntimeError(
-            f"Could not parse Groq question response as JSON: {content!r}"
-        ) from exc
-
-    questions = data.get("questions") if isinstance(data, dict) else None
+    questions = data.get("questions")
     if (
         not isinstance(questions, list)
         or len(questions) != 5
         or not all(isinstance(q, str) for q in questions)
     ):
-        raise RuntimeError(
-            f"Groq returned an unexpected shape for questions: {data!r}"
-        )
+        logger.error("Unexpected Groq question shape")
+        raise LLMBadResponse("Groq returned an unexpected shape for questions")
 
     return questions
 
@@ -319,14 +382,14 @@ def _is_single_sentence(answer: str) -> bool:
 
 def _parse_dim(obj, name: str, answer: str) -> dict:
     if not isinstance(obj, dict):
-        raise RuntimeError(f"Groq evaluation missing or malformed dimension: {name!r}")
+        raise LLMBadResponse(f"Groq evaluation missing or malformed dimension: {name!r}")
     raw = obj.get("score")
     if isinstance(raw, bool):
-        raise RuntimeError(f"Groq returned an invalid score for {name!r}: {raw!r}")
+        raise LLMBadResponse(f"Groq returned an invalid score for {name!r}")
     try:
         score = int(round(float(raw)))
     except (TypeError, ValueError):
-        raise RuntimeError(f"Groq returned a non-numeric score for {name!r}: {raw!r}")
+        raise LLMBadResponse(f"Groq returned a non-numeric score for {name!r}")
     score = max(1, min(5, score))
     evidence = obj.get("evidence", [])
     if isinstance(evidence, str):
@@ -402,31 +465,13 @@ def evaluate_answer(question: str, answer: str) -> dict:
     if _is_mock_mode():
         return _mock_evaluate_answer(question, answer)
 
-    client = _get_client()
-
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": _build_system_prompt()},
-                {"role": "user", "content": _build_user_message(question, answer)},
-            ],
-            response_format={"type": "json_object"},
-        )
-    except APIError as exc:
-        raise RuntimeError(
-            f"Groq API call failed during answer evaluation: {exc}"
-        ) from exc
-
-    content = response.choices[0].message.content
-    try:
-        data = json.loads(content)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise RuntimeError(
-            f"Could not parse Groq evaluation response as JSON: {content!r}"
-        ) from exc
-    if not isinstance(data, dict):
-        raise RuntimeError(f"Groq evaluation was not a JSON object: {content!r}")
+    data = _chat(
+        [
+            {"role": "system", "content": _build_system_prompt()},
+            {"role": "user", "content": _build_user_message(question, answer)},
+        ],
+        "answer evaluation",
+    )
 
     dims = {d: _parse_dim(data.get(d), d, answer) for d in _RUBRIC_ORDER}
     # Deterministic backstop for the prompt's substance guardrail: enforce the single-sentence
@@ -511,32 +556,17 @@ def generate_study_note(weak_areas: list[dict]) -> str | None:
     if _is_mock_mode():
         return _mock_generate_study_note(weak_areas)
 
-    client = _get_client()
+    data = _chat(
+        [
+            {"role": "system", "content": _build_study_system_prompt()},
+            {"role": "user", "content": _build_study_user_message(weak_areas)},
+        ],
+        "study-note generation",
+    )
 
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": _build_study_system_prompt()},
-                {"role": "user", "content": _build_study_user_message(weak_areas)},
-            ],
-            response_format={"type": "json_object"},
-        )
-    except APIError as exc:
-        raise RuntimeError(
-            f"Groq API call failed during study-note generation: {exc}"
-        ) from exc
-
-    content = response.choices[0].message.content
-    try:
-        data = json.loads(content)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise RuntimeError(
-            f"Could not parse Groq study-note response as JSON: {content!r}"
-        ) from exc
-
-    note = data.get("study_note") if isinstance(data, dict) else None
+    note = data.get("study_note")
     if not isinstance(note, str) or not note.strip():
-        raise RuntimeError(f"Groq returned an unexpected shape for the study note: {data!r}")
+        logger.error("Unexpected Groq study-note shape")
+        raise LLMBadResponse("Groq returned an unexpected shape for the study note")
 
     return note.strip()

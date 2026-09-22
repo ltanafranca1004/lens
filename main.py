@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
+from app.llm_errors import LLMError, LLMRateLimited
 from app.routers import auth, sessions
 
 load_dotenv()
@@ -38,6 +39,16 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         headers["Vary"] = "Origin"
     return JSONResponse(
         status_code=500, content={"detail": "Internal Server Error"}, headers=headers
+    )
+
+
+# Groq failures and the daily AI cap become a clean 429/502/503 with a plain "detail" the frontend
+# shows as-is. Class-specific handlers run inside CORSMiddleware, so CORS headers apply normally.
+@app.exception_handler(LLMError)
+async def llm_error_handler(request: Request, exc: LLMError) -> JSONResponse:
+    headers = {"Retry-After": str(exc.retry_after)} if isinstance(exc, LLMRateLimited) else None
+    return JSONResponse(
+        status_code=exc.status_code, content={"detail": exc.message}, headers=headers
     )
 
 

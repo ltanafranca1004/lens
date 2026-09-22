@@ -27,12 +27,14 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
+# Text caps keep a single Groq request (prompt + input + output) under the free tier's 8,000
+# tokens/minute; see also MAX_RESUME_CHARS in app/resume.py.
 class SessionCreate(BaseModel):
-    job_posting: str = Field(min_length=20, max_length=20000)
+    job_posting: str = Field(min_length=20, max_length=12000)
 
 
 class AnswerSubmit(BaseModel):
-    answer: str = Field(min_length=1, max_length=10000)
+    answer: str = Field(min_length=1, max_length=6000)
 
 
 class RubricDimensionOut(BaseModel):

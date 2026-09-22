@@ -1,3 +1,5 @@
+import asyncio
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -6,7 +8,9 @@ from sqlalchemy.orm import Session as DbSession
 from app.auth import get_current_user
 from app.database import get_db
 from app.llm import evaluate_answer, generate_questions
+from app.llm_errors import LLMError
 from app.models import Question, Session, User
+from app.ratelimit import limit_by_user
 from app.resume import MAX_UPLOAD_BYTES, ResumeParseError, extract_resume_text
 from app.schemas import (
     AnswerSubmit,
@@ -19,6 +23,8 @@ from app.schemas import (
 from app.study import build_study_note
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+DEFAULT_RESUME_PARSE_TIMEOUT_SECONDS = 10.0
 
 
 def _get_owned_session(session_id: int, user: User, db: DbSession) -> Session:
@@ -48,7 +54,12 @@ def _get_owned_question(
     return session, question
 
 
-@router.post("", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=SessionOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(limit_by_user("create_session"))],
+)
 def create_session(
     payload: SessionCreate,
     db: DbSession = Depends(get_db),
@@ -95,7 +106,11 @@ def get_session(
     )
 
 
-@router.post("/{session_id}/resume", response_model=ResumeUploadResult)
+@router.post(
+    "/{session_id}/resume",
+    response_model=ResumeUploadResult,
+    dependencies=[Depends(limit_by_user("resume"))],
+)
 async def upload_resume(
     session_id: int,
     file: UploadFile = File(...),
@@ -131,12 +146,25 @@ async def upload_resume(
             detail="Uploaded file is empty.",
         )
 
+    # Parse in a worker thread so a slow file can't block the event loop, and give up after a
+    # timeout. Python can't kill the thread, so a timed-out parse still finishes in the background;
+    # MAX_PDF_PAGES and the decompression cap bound how long that can take.
+    timeout = float(
+        os.getenv("RESUME_PARSE_TIMEOUT_SECONDS") or DEFAULT_RESUME_PARSE_TIMEOUT_SECONDS
+    )
     try:
-        resume_text = extract_resume_text(file.filename or "", data)
+        resume_text = await asyncio.wait_for(
+            asyncio.to_thread(extract_resume_text, data), timeout=timeout
+        )
     except ResumeParseError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
+        ) from exc
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Your resume took too long to process. Try a simpler PDF or a .docx.",
         ) from exc
 
     session.resume_text = resume_text
@@ -148,6 +176,7 @@ async def upload_resume(
     "/{session_id}/questions",
     response_model=list[QuestionOut],
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(limit_by_user("generate"))],
 )
 def create_questions(
     session_id: int,
@@ -175,7 +204,11 @@ def create_questions(
     return questions
 
 
-@router.post("/{session_id}/questions/{question_id}/answer", response_model=QuestionOut)
+@router.post(
+    "/{session_id}/questions/{question_id}/answer",
+    response_model=QuestionOut,
+    dependencies=[Depends(limit_by_user("answer"))],
+)
 def submit_answer(
     session_id: int,
     question_id: int,
@@ -259,7 +292,11 @@ def skip_question(
     return question
 
 
-@router.patch("/{session_id}", response_model=SessionOut)
+@router.patch(
+    "/{session_id}",
+    response_model=SessionOut,
+    dependencies=[Depends(limit_by_user("complete"))],
+)
 def complete_session(
     session_id: int,
     db: DbSession = Depends(get_db),
@@ -276,7 +313,7 @@ def complete_session(
     if was_in_progress:
         try:
             session.study_note = build_study_note(session.questions)
-        except RuntimeError:
+        except LLMError:
             session.study_note = None
 
     db.commit()
