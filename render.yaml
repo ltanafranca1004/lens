@@ -21,3 +21,15 @@ services:
         sync: false        # set to the Vercel URL after the frontend deploys
       - key: PYTHON_VERSION
         value: "3.12.2"
+      # Global daily Groq circuit breaker: 90% of the free tier (1,000 RPD / 200k TPD).
+      - key: GROQ_DAILY_CALL_CAP
+        value: "900"
+      - key: GROQ_DAILY_TOKEN_CAP
+        value: "180000"
+      - key: GROQ_TIMEOUT_SECONDS
+        value: "30"
+      # Client IP behind the proxy; set after verifying what Render sends (see PR).
+      - key: CLIENT_IP_HEADER
+        sync: false
+      - key: TRUSTED_PROXY_COUNT
+        sync: false
