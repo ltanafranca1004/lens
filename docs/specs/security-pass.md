@@ -71,6 +71,8 @@ and PHONEIP (phone).
 - Allow only the production Vercel domain (plus localhost via env in dev).
 - No wildcard origins with credentials.
 - Decide explicitly whether Vercel preview URLs are allowed.
+  **Decision (2026-09-22): denied.** Only the production Vercel URL is allowed, and the API refuses
+  to start if `CORS_ORIGINS` contains `*`.
 
 ## 7. Secrets in a public repo
 - Scan full git history for keys (e.g. gitleaks). Rotate anything found.
