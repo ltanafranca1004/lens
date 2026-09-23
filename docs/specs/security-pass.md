@@ -43,6 +43,11 @@ and PHONEIP (phone).
   request and an XFF-spoofed request both resolved to MYIP, matching ipify.
 - If the header is ever missing, the request falls into a shared `"unknown"` bucket and a warning
   (no IP values) is logged.
+- Trust boundary: the API is served only at its `onrender.com` hostname, which is itself behind
+  Render's Cloudflare edge, so there is no un-proxied origin URL to send a forged header to. The
+  403 above was observed on that same public hostname. **Re-verify before adding a custom domain**
+  (especially one proxied through our own Cloudflare zone), and disable the `onrender.com`
+  subdomain once a custom domain is live.
 
 ## 2. Input size limits (cost and abuse)
 - Cap job posting and answer text length before it reaches the LLM.
