@@ -24,7 +24,13 @@ export class ApiError extends Error {
   }
 }
 
-type ApiInit = Omit<RequestInit, 'body'> & { body?: unknown; timeoutMs?: number }
+// `unauthenticated` (login/register) sends no token and never treats a 401 as an expired session:
+// there a 401 means wrong credentials.
+type ApiInit = Omit<RequestInit, 'body'> & {
+  body?: unknown
+  timeoutMs?: number
+  unauthenticated?: boolean
+}
 
 // Fetch that aborts after `timeoutMs`. Both a timeout and a network failure are
 // re-thrown as ApiError so callers never see a raw AbortError/TypeError.
@@ -48,12 +54,12 @@ async function fetchWithTimeout(
 }
 
 export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = init
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, unauthenticated = false, ...rest } = init
 
   const headers = new Headers(rest.headers)
   headers.set('Accept', 'application/json')
 
-  const token = tokenStore.get()
+  const token = unauthenticated ? null : tokenStore.get()
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   let body: BodyInit | undefined

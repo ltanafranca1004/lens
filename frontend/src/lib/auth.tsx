@@ -43,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     const t = await api<Token>('/auth/login', {
       method: 'POST',
+      unauthenticated: true,
       body: { email, password },
     })
     tokenStore.set(t.access_token)
@@ -54,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (email: string, displayName: string, password: string) => {
     const newUser = await api<User>('/auth/register', {
       method: 'POST',
+      unauthenticated: true,
       body: { email, display_name: displayName, password },
     })
     await login(email, password)
