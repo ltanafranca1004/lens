@@ -1,7 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.auth import create_access_token, get_current_user, hash_password, verify_password
+from app.auth import (
+    DUMMY_PASSWORD_HASH,
+    create_access_token,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
 from app.database import get_db
 from app.models import User
 from app.ratelimit import limit_by_ip
@@ -38,7 +44,9 @@ def register(payload: UserCreate, db: Session = Depends(get_db)) -> User:
 @router.post("/login", response_model=Token, dependencies=[Depends(limit_by_ip("login"))])
 def login(payload: UserLogin, db: Session = Depends(get_db)) -> Token:
     user = db.query(User).filter(User.email == payload.email).first()
-    if user is None or not verify_password(payload.password, user.password_hash):
+    # Unknown emails still pay for one bcrypt check, so response time doesn't reveal which emails exist.
+    password_hash = user.password_hash if user is not None else DUMMY_PASSWORD_HASH
+    if not verify_password(payload.password, password_hash) or user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
