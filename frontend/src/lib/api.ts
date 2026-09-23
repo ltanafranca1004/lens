@@ -74,7 +74,8 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
 
   const res = await fetchWithTimeout(path, { ...rest, headers, body }, timeoutMs)
 
-  if (res.status === 401 && token) {
+  // Skip if the user has signed in again since this request was sent: the 401 is about the old token.
+  if (res.status === 401 && token && tokenStore.get() === token) {
     tokenStore.clear()
     window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
   }
