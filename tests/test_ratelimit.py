@@ -108,18 +108,28 @@ class ClientIp(unittest.TestCase):
             req = _request({"X-Forwarded-For": "203.0.113.9, 5.5.5.5, 10.1.1.1"})
             self.assertEqual(ratelimit.client_ip(req), "5.5.5.5")
 
-    def test_too_few_hops_falls_back_to_peer_not_leftmost(self):
+    def test_too_few_hops_is_unknown_not_leftmost_or_peer(self):
         with mock.patch.dict(os.environ, {"CLIENT_IP_HEADER": "", "TRUSTED_PROXY_COUNT": "2"}):
-            self.assertEqual(ratelimit.client_ip(_request({"X-Forwarded-For": "203.0.113.9"})), "10.0.0.1")
+            self.assertEqual(ratelimit.client_ip(_request({"X-Forwarded-For": "203.0.113.9"})), "unknown")
 
     def test_configured_header(self):
         with mock.patch.dict(os.environ, {"CLIENT_IP_HEADER": "CF-Connecting-IP"}):
             req = _request({"CF-Connecting-IP": "8.8.8.8", "X-Forwarded-For": "1.1.1.1"})
             self.assertEqual(ratelimit.client_ip(req), "8.8.8.8")
 
-    def test_no_headers_uses_peer(self):
+    def test_no_headers_is_unknown_not_peer(self):
         with mock.patch.dict(os.environ, {"CLIENT_IP_HEADER": "", "TRUSTED_PROXY_COUNT": ""}):
-            self.assertEqual(ratelimit.client_ip(_request({})), "10.0.0.1")
+            self.assertEqual(ratelimit.client_ip(_request({})), "unknown")
+
+    def test_configured_header_missing_is_unknown_and_logs_no_ip(self):
+        with mock.patch.dict(os.environ, {"CLIENT_IP_HEADER": "cf-connecting-ip"}):
+            req = _request({"X-Forwarded-For": "203.0.113.9, 5.5.5.5"})
+            with self.assertLogs("app.ratelimit", level="WARNING") as logs:
+                self.assertEqual(ratelimit.client_ip(req), "unknown")
+        self.assertNotRegex("\n".join(logs.output), r"\d+\.\d+\.\d+\.\d+")
+
+    def test_ip_debug_logging_removed(self):
+        self.assertFalse(hasattr(ratelimit, "_log_ip_debug"))
 
 
 def _db_finding_nothing():

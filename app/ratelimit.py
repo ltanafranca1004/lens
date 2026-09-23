@@ -115,38 +115,21 @@ store: RateLimitStore = InMemoryRateLimitStore()
 
 
 def client_ip(request: Request) -> str:
-    """The caller's IP behind Render's proxy. Never trusts the leftmost X-Forwarded-For entry
-    (client-controlled). Either a single-valued header set by the edge (CLIENT_IP_HEADER, e.g.
-    cf-connecting-ip) or the entry TRUSTED_PROXY_COUNT positions from the right of X-Forwarded-For
-    (default 1: the one the proxy appended). Falls back to the socket peer."""
+    """The caller's IP behind Render's proxy. Production sets CLIENT_IP_HEADER=cf-connecting-ip:
+    single-valued, set by Cloudflare, and rejected by Cloudflare when a client supplies it. Without
+    it (local dev), the X-Forwarded-For entry TRUSTED_PROXY_COUNT positions from the right (default
+    1); the leftmost entry is client-controlled and never used. Never falls back to the socket peer,
+    which uvicorn rewrites from X-Forwarded-For. Unresolvable callers share one "unknown" bucket."""
     header = os.getenv("CLIENT_IP_HEADER", "").strip().lower()
     if header:
         value = request.headers.get(header, "").strip()
         if value:
             return value
-    else:
-        hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
-        n = max(1, int(os.getenv("TRUSTED_PROXY_COUNT") or 1))
-        if len(hops) >= n:
-            return hops[-n]
-    return request.client.host if request.client else "unknown"
-
-
-def _log_ip_debug(request: Request, resolved: str) -> None:
-    # TEMPORARY: verifies what Render's proxy sends (see the PR). Headers only -- no body or auth.
-    h = request.headers
-    logger.warning(
-        "client-ip-debug path=%s peer=%s x-forwarded-for=%r cf-connecting-ip=%r true-client-ip=%r "
-        "x-real-ip=%r forwarded=%r resolved=%s",
-        request.url.path,
-        request.client.host if request.client else None,
-        h.get("x-forwarded-for"),
-        h.get("cf-connecting-ip"),
-        h.get("true-client-ip"),
-        h.get("x-real-ip"),
-        h.get("forwarded"),
-        resolved,
-    )
+        logger.warning("client-ip header %s missing on %s", header, request.url.path)
+        return "unknown"
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    n = max(1, int(os.getenv("TRUSTED_PROXY_COUNT") or 1))
+    return hops[-n] if len(hops) >= n else "unknown"
 
 
 def _format_wait(seconds: int) -> str:
@@ -183,9 +166,6 @@ def limit_by_ip(scope: str) -> Callable[..., None]:
     """Dependency: limit a (possibly anonymous) caller's requests for `scope` by client IP."""
 
     def dependency(request: Request) -> None:
-        ip = client_ip(request)
-        if os.getenv("LOG_CLIENT_IP_DEBUG", "").lower() == "true":
-            _log_ip_debug(request, ip)
-        _enforce(scope, f"ip:{ip}")
+        _enforce(scope, f"ip:{client_ip(request)}")
 
     return dependency

@@ -17,6 +17,33 @@ Time-box: 1 week. Goal: safe to invite strangers, not perfect security.
 - In-memory limiter is fine for v1 (single instance). Note that limits
   reset when Render spins down.
 
+### How client IP was verified (2026-09-22/23)
+Checked against production with curl and the Render logs (read-only MCP), using temporary
+`client-ip-debug` logging that has since been removed. Real addresses are masked as MYIP (laptop)
+and PHONEIP (phone).
+- Requests: plain; `X-Forwarded-For: 203.0.113.9` only; `True-Client-IP` only; `X-Real-IP` only;
+  all four spoof headers together; a real browser login from a phone on cellular.
+- Header chain: `x-forwarded-for` = `client, <Cloudflare edge>, <Render internal proxy>`. The
+  Cloudflare edge address varies; the Render proxy is a private 10.x address that changes between
+  instances.
+- The real client is 3rd from the right in XFF, every time. A spoofed XFF value is only prepended
+  on the left (`203.0.113.9,MYIP, ...`).
+- `cf-connecting-ip` and `true-client-ip` always carried the real client (MYIP / PHONEIP), even
+  when spoofed. A spoofed `True-Client-IP` is overwritten, a spoofed `X-Real-IP` is stripped, and a
+  client-supplied `CF-Connecting-IP` is rejected by Cloudflare (403, "error code: 1000") before
+  reaching the app.
+- The original default (rightmost XFF entry) was wrong: it is Render's internal proxy, so every
+  user shared one per-IP bucket.
+- `request.client.host` is forgeable: it became `203.0.113.9` when XFF was spoofed, because
+  uvicorn trusts XFF. The code never uses it.
+- Chosen: `CLIENT_IP_HEADER=cf-connecting-ip` (single-valued, set by Cloudflare, not
+  client-suppliable). `TRUSTED_PROXY_COUNT=3` also resolves correctly today but would silently
+  break if Render changes its hop count.
+- Confirmed after setting it (deploy `dep-dapikjek1f9s7396jnu0`, 2026-09-23 01:25 UTC): a plain
+  request and an XFF-spoofed request both resolved to MYIP, matching ipify.
+- If the header is ever missing, the request falls into a shared `"unknown"` bucket and a warning
+  (no IP values) is logged.
+
 ## 2. Input size limits (cost and abuse)
 - Cap job posting and answer text length before it reaches the LLM.
 - Cap resume upload size and page count; add a parse timeout.
