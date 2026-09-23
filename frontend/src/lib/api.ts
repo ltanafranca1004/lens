@@ -7,6 +7,9 @@ const DEFAULT_TIMEOUT_MS = 60_000
 // set to the Render URL via VITE_API_URL in production.
 const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
 
+// Fired when a request made with a token comes back 401 (expired or revoked); AuthProvider listens.
+export const SESSION_EXPIRED_EVENT = 'lens:session-expired'
+
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
   set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
@@ -64,6 +67,11 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
   }
 
   const res = await fetchWithTimeout(path, { ...rest, headers, body }, timeoutMs)
+
+  if (res.status === 401 && token) {
+    tokenStore.clear()
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+  }
 
   if (res.status === 204) return undefined as T
 
