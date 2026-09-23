@@ -7,6 +7,9 @@ const DEFAULT_TIMEOUT_MS = 60_000
 // set to the Render URL via VITE_API_URL in production.
 const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
 
+// Fired when a request made with a token comes back 401 (expired or revoked); AuthProvider listens.
+export const SESSION_EXPIRED_EVENT = 'lens:session-expired'
+
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
   set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
@@ -21,7 +24,13 @@ export class ApiError extends Error {
   }
 }
 
-type ApiInit = Omit<RequestInit, 'body'> & { body?: unknown; timeoutMs?: number }
+// `unauthenticated` (login/register) sends no token and never treats a 401 as an expired session:
+// there a 401 means wrong credentials.
+type ApiInit = Omit<RequestInit, 'body'> & {
+  body?: unknown
+  timeoutMs?: number
+  unauthenticated?: boolean
+}
 
 // Fetch that aborts after `timeoutMs`. Both a timeout and a network failure are
 // re-thrown as ApiError so callers never see a raw AbortError/TypeError.
@@ -45,12 +54,12 @@ async function fetchWithTimeout(
 }
 
 export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = init
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, unauthenticated = false, ...rest } = init
 
   const headers = new Headers(rest.headers)
   headers.set('Accept', 'application/json')
 
-  const token = tokenStore.get()
+  const token = unauthenticated ? null : tokenStore.get()
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   let body: BodyInit | undefined
@@ -64,6 +73,12 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
   }
 
   const res = await fetchWithTimeout(path, { ...rest, headers, body }, timeoutMs)
+
+  // Skip if the user has signed in again since this request was sent: the 401 is about the old token.
+  if (res.status === 401 && token && tokenStore.get() === token) {
+    tokenStore.clear()
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+  }
 
   if (res.status === 204) return undefined as T
 

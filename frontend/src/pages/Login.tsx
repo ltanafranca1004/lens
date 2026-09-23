@@ -10,7 +10,7 @@ import { useSlowNotice } from '@/lib/useSlowNotice'
 type Mode = 'login' | 'register'
 
 export function LoginPage() {
-  const { login, register, isAuthenticated } = useAuth()
+  const { login, register, isAuthenticated, sessionExpired } = useAuth()
   const nav = useNavigate()
   const loc = useLocation()
   const [mode, setMode] = useState<Mode>('login')
@@ -121,6 +121,12 @@ export function LoginPage() {
           {error && (
             <p className="mt-6 text-sm text-[oklch(0.5_0.14_25)]" role="alert">
               {error}
+            </p>
+          )}
+
+          {sessionExpired && !error && !busy && (
+            <p className="mt-6 text-sm text-ink-soft" role="status">
+              Your session expired. Sign in again to continue.
             </p>
           )}
 

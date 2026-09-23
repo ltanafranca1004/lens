@@ -10,11 +10,25 @@ from app.routers import auth, sessions
 
 load_dotenv()
 
-app = FastAPI()
+
+def _docs_settings() -> dict[str, str | None]:
+    # /docs, /redoc and /openapi.json are off unless ENABLE_API_DOCS=true (local dev only).
+    if os.getenv("ENABLE_API_DOCS", "").lower() == "true":
+        return {}
+    return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    if "*" in origins:
+        raise RuntimeError("CORS_ORIGINS must list explicit origins; '*' is not allowed")
+    return origins
+
+
+app = FastAPI(**_docs_settings())
 
 # Comma-separated allowlist; defaults to the local Vite dev origin.
-_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173")
-allow_origins = [o.strip() for o in _origins.split(",") if o.strip()]
+allow_origins = _parse_cors_origins(os.getenv("CORS_ORIGINS", "http://localhost:5173"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,8 +48,8 @@ app.add_middleware(
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     origin = request.headers.get("origin")
     headers: dict[str, str] = {}
-    if origin and (origin in allow_origins or "*" in allow_origins):
-        headers["Access-Control-Allow-Origin"] = "*" if "*" in allow_origins else origin
+    if origin and origin in allow_origins:
+        headers["Access-Control-Allow-Origin"] = origin
         headers["Vary"] = "Origin"
     return JSONResponse(
         status_code=500, content={"detail": "Internal Server Error"}, headers=headers

@@ -1,16 +1,31 @@
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, EmailStr, Field
+from pydantic_core import PydanticCustomError
+
+BCRYPT_MAX_PASSWORD_BYTES = 72
+
+
+def _within_bcrypt_limit(password: str) -> str:
+    # bcrypt only accepts 72 bytes (bcrypt 5 raises past that), so reject with a 422 instead of a 500.
+    if len(password.encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
+        raise PydanticCustomError(
+            "password_too_long",
+            "Password is too long (max 72 bytes; some characters count as more than one).",
+        )
+    return password
 
 
 class UserCreate(BaseModel):
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=80)
-    password: str = Field(min_length=8, max_length=128)
+    password: Annotated[str, Field(min_length=8, max_length=128), AfterValidator(_within_bcrypt_limit)]
 
 
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str
+    password: Annotated[str, AfterValidator(_within_bcrypt_limit)]
 
 
 class UserOut(BaseModel):

@@ -13,18 +13,36 @@ from app.models import User
 
 load_dotenv()
 
-JWT_SECRET = os.getenv("JWT_SECRET")
-if not JWT_SECRET:
-    raise RuntimeError("JWT_SECRET is not set in the environment")
+MIN_JWT_SECRET_BYTES = 32
+
+
+def _load_jwt_secret() -> str:
+    # Never include the value in the error.
+    secret = os.getenv("JWT_SECRET")
+    if not secret:
+        raise RuntimeError("JWT_SECRET is not set in the environment")
+    if len(secret.encode("utf-8")) < MIN_JWT_SECRET_BYTES:
+        raise RuntimeError(
+            f"JWT_SECRET must be at least {MIN_JWT_SECRET_BYTES} bytes; generate one with: openssl rand -hex 32"
+        )
+    return secret
+
+
+JWT_SECRET = _load_jwt_secret()
 
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 12  # 12 hours
+BCRYPT_ROUNDS = 12
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("utf-8")
+
+
+# Checked against on logins for unknown emails, so they cost the same bcrypt work as a wrong password.
+DUMMY_PASSWORD_HASH = hash_password("lens-dummy-password")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
