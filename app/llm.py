@@ -50,8 +50,11 @@ def _groq_retry_after(exc: RateLimitError) -> int | None:
     return None
 
 
-def _chat(messages: list[dict], stage: str) -> dict:
+def _chat(messages: list[dict], stage: str, reasoning_effort: str | None = None) -> dict:
     """One JSON-mode Groq completion, parsed. Shared by every real (non-mock) LLM call.
+
+    reasoning_effort is only sent when given; otherwise Groq's default applies. Answer evaluation
+    never passes it, because its effort is what the 50-example eval validated.
 
     Reserves the global daily budget first, maps Groq failures to typed LLMErrors, reconciles the
     reservation with real token usage, and returns the parsed JSON object. Logs and exception
@@ -61,10 +64,12 @@ def _chat(messages: list[dict], stage: str) -> dict:
     client = _get_client()
     reservation = groq_usage.reserve_call()
     try:
+        extra = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
         response = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=messages,
             response_format={"type": "json_object"},
+            **extra,
         )
     except RateLimitError as exc:
         groq_usage.settle(reservation, 0)  # rejected up front: nothing was generated
@@ -209,6 +214,7 @@ def generate_questions(job_posting: str, resume_text: str | None = None) -> list
             },
         ],
         "question generation",
+        reasoning_effort="low",
     )
 
     questions = data.get("questions")
@@ -574,6 +580,7 @@ def generate_study_note(weak_areas: list[dict]) -> str | None:
             {"role": "user", "content": _build_study_user_message(weak_areas)},
         ],
         "study-note generation",
+        reasoning_effort="low",
     )
 
     note = data.get("study_note")

@@ -138,8 +138,9 @@ class Idor(unittest.TestCase):
             qa[0].ai_feedback = "A-FEEDBACK-1"
             qa[0].rubric = {"correctness": {"score": 4, "evidence": ["A-EVIDENCE"], "reasoning": "A-REASONING"}}
             qa[0].answered_at = datetime.now(timezone.utc)
+            qa2 = Question(session_id=sa2.id, question_text="A-QUESTION-DONE", order_index=1, skipped=True)
             qb = Question(session_id=sb.id, question_text="B-QUESTION-1", order_index=1)
-            db.add_all([*qa, qb])
+            db.add_all([*qa, qa2, qb])
             db.commit()
 
             self.a_id, self.b_id = a.id, b.id
@@ -193,6 +194,14 @@ class Idor(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual([s["id"] for s in r.json()], [self.sb])
         self.assertNotIn("A-POSTING", r.text)
+
+    def test_list_hides_sessions_without_questions(self):
+        # sa_empty has no questions (an abandoned attempt), so only SA and SA2 are listed.
+        r = self.client.get("/sessions", headers=self.a_headers)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(sorted(s["id"] for s in r.json()), sorted([self.sa, self.sa2]))
+        # Still reachable directly by its owner; only the list hides it.
+        self.assertEqual(self.client.get(f"/sessions/{self.sa_empty}", headers=self.a_headers).status_code, 200)
 
     # --- 2-7. every ID route, B against A's resources -------------------------------------------
 
