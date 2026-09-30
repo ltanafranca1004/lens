@@ -16,6 +16,18 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+const DRAFT_PREFIX = 'lens.draft.'
+
+function clearDrafts() {
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith(DRAFT_PREFIX))
+      .forEach((k) => localStorage.removeItem(k))
+  } catch {
+    /* ignore */
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient()
   const [token, setToken] = useState<string | null>(() => tokenStore.get())
@@ -62,7 +74,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return newUser
   }
 
+  // A real logout wipes answer drafts so the next person on this browser can't read them. An expired
+  // session (the SESSION_EXPIRED_EVENT handler above) deliberately keeps them for after sign-in.
   const logout = () => {
+    clearDrafts()
     tokenStore.clear()
     setToken(null)
     qc.clear()
