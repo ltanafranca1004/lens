@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight } from 'lucide-react'
@@ -13,6 +13,13 @@ import type { Question, SessionSummary } from '@/lib/types'
 const RESUME_EXTENSIONS = ['.pdf', '.docx']
 const MAX_RESUME_BYTES = 5 * 1024 * 1024
 
+// A failed resume upload, so its message can be shown next to the resume field.
+class ResumeUploadError extends Error {}
+
+// The session from an attempt that failed after it was created. Retrying with the same posting
+// reuses it instead of creating another session with no questions.
+type PendingSession = { sessionId: number; posting: string; uploaded: File | null }
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
 }
@@ -23,6 +30,8 @@ export function HomePage() {
   const [posting, setPosting] = useState('')
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [resumeError, setResumeError] = useState<string | null>(null)
+  const pending = useRef<PendingSession | null>(null)
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions'],
@@ -32,28 +41,49 @@ export function HomePage() {
 
   const startMutation = useMutation({
     mutationFn: async ({ jobPosting, resume }: { jobPosting: string; resume: File | null }) => {
-      const session = await api<SessionSummary>('/sessions', {
-        method: 'POST',
-        body: { job_posting: jobPosting },
-      })
+      let p = pending.current
+      // A new posting, or a resume removed after it was uploaded (the session still holds its
+      // text), needs a fresh session.
+      if (!p || p.posting !== jobPosting || (p.uploaded && !resume)) {
+        const session = await api<SessionSummary>('/sessions', {
+          method: 'POST',
+          body: { job_posting: jobPosting },
+        })
+        p = pending.current = { sessionId: session.id, posting: jobPosting, uploaded: null }
+      }
       // Upload the resume (if any) BEFORE generating — the backend snapshots resume_text at
-      // generation time and 409s a resume uploaded after questions exist.
-      if (resume) {
+      // generation time and 409s a resume uploaded after questions exist. A different file replaces
+      // the one uploaded on an earlier attempt.
+      if (resume && resume !== p.uploaded) {
         const form = new FormData()
         form.append('file', resume)
-        await api<{ filename: string; resume_chars: number }>(
-          `/sessions/${session.id}/resume`,
-          { method: 'POST', body: form },
-        )
+        try {
+          await api<{ filename: string; resume_chars: number }>(`/sessions/${p.sessionId}/resume`, {
+            method: 'POST',
+            body: form,
+          })
+        } catch (err) {
+          throw new ResumeUploadError(err instanceof ApiError ? err.message : 'Could not upload the resume.')
+        }
+        p.uploaded = resume
       }
-      await api<Question[]>(`/sessions/${session.id}/questions`, { method: 'POST' })
-      return session
+      try {
+        await api<Question[]>(`/sessions/${p.sessionId}/questions`, { method: 'POST' })
+      } catch (err) {
+        // 409: an earlier attempt generated the questions but its response never arrived.
+        if (!(err instanceof ApiError && err.status === 409)) throw err
+      }
+      pending.current = null
+      return p.sessionId
     },
-    onSuccess: (session) => {
+    onSuccess: (sessionId) => {
       qc.invalidateQueries({ queryKey: ['sessions'] })
-      nav(`/interview/${session.id}`)
+      nav(`/interview/${sessionId}`)
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : 'Something went wrong'),
+    onError: (err) => {
+      if (err instanceof ResumeUploadError) setResumeError(err.message)
+      else setError(err instanceof ApiError ? err.message : 'Something went wrong')
+    },
   })
 
   const slow = useSlowNotice(startMutation.isPending)
@@ -61,6 +91,7 @@ export function HomePage() {
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
+    setResumeError(null)
     if (posting.trim().length < 20) {
       setError('Paste a real job posting — at least 20 characters.')
       return
@@ -68,11 +99,11 @@ export function HomePage() {
     if (resumeFile) {
       const lower = resumeFile.name.toLowerCase()
       if (!RESUME_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
-        setError('Resume must be a PDF or .docx file.')
+        setResumeError('Resume must be a PDF or .docx file.')
         return
       }
       if (resumeFile.size > MAX_RESUME_BYTES) {
-        setError('Resume file is too large (max 5 MB).')
+        setResumeError('Resume file is too large (max 5 MB).')
         return
       }
     }
@@ -112,10 +143,19 @@ export function HomePage() {
             id="resume"
             type="file"
             accept=".pdf,.docx"
-            onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => {
+              setResumeFile(e.target.files?.[0] ?? null)
+              setResumeError(null)
+            }}
+            aria-invalid={resumeError ? true : undefined}
             className="block w-full text-[14px] text-ink-soft file:mr-3 file:rounded-md file:border file:border-line file:bg-panel file:px-3 file:py-1.5 file:text-ink hover:file:bg-panel/70 file:cursor-pointer"
           />
           {resumeFile && <p className="meta mt-1.5">Attached: {resumeFile.name}</p>}
+          {resumeError && (
+            <p className="mt-1.5 text-[0.8rem] text-[oklch(0.5_0.14_25)] leading-snug" role="alert">
+              {resumeError}
+            </p>
+          )}
         </div>
         <div className="flex items-center justify-between gap-4 mt-5">
           <span className="meta hidden sm:inline">
