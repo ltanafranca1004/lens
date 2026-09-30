@@ -77,9 +77,11 @@ def list_sessions(
     db: DbSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[Session]:
+    # Sessions with no questions are abandoned attempts (upload or generation failed), not
+    # something the user can open, so they're left out of the list.
     return (
         db.query(Session)
-        .filter(Session.user_id == current_user.id)
+        .filter(Session.user_id == current_user.id, Session.questions.any())
         .order_by(Session.created_at.desc())
         .all()
     )
