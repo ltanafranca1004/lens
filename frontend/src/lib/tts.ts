@@ -3,8 +3,8 @@
 //   - browser `speechSynthesis` (default): instant, no download, works in every browser.
 //   - Kokoro-82M "natural voice" (opt-in): higher quality, runs entirely in a dedicated Web Worker
 //     (see tts.worker.ts) so the ~110 MB one-time download + WASM inference never block/freeze the UI.
-//     Model weights are cached (Cache API/IndexedDB); the ORT runtime wasm is fetched from jsDelivr on
-//     first use. Falls back to speechSynthesis on any failure.
+//     Model weights are cached (Cache API/IndexedDB); the ORT runtime wasm is served from our own
+//     /ort/ (copied at build time, see vite.config.ts). Falls back to speechSynthesis on any failure.
 // No backend and no API key. The only network use is Kokoro's one-time weight + runtime download.
 
 export type SpeakHandlers = { onStart?: () => void; onEnd?: () => void }
